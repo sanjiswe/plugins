@@ -2,8 +2,8 @@ id: ostats
 name: O Stats
 metadata:
   description: Adds O stats to the stats page
-version: 1.0-08127c4
-date: '2025-12-23 10:59:11'
+version: 1.0-c4788ca
+date: '2025-12-23 11:07:24'
 requires:
   [
     https://github.com/stashapp/CommunityScripts/tree/main/plugins/CommunityScriptsUILibrary,
@@ -14,5 +14,5 @@ files:
   - save_watch_data.py
   - load_watch_data.py
   - ostats.yml
-  - ostats_watch_history.json
+  - ostats_watch_data.json
   - manifest
