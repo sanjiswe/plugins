@@ -334,8 +334,27 @@
     }
   }
 
+  // Check if we're currently on a scene page
+  function isOnScenePage() {
+    return /\/scenes\/\d+/.test(window.location.pathname)
+  }
+
   // Hook into video player events
   function setupVideoPlayerTracking() {
+    // Monitor route changes to stop tracking when leaving scene page
+    let lastPath = window.location.pathname
+    const checkPathChange = setInterval(async () => {
+      const currentPath = window.location.pathname
+      if (currentPath !== lastPath) {
+        lastPath = currentPath
+        // If we've left the scene page and tracking is active, stop it
+        if (!isOnScenePage() && trackingIntervalId) {
+          console.log('[OStats] Left scene page, stopping tracking')
+          await stopWatchTimeTracking()
+        }
+      }
+    }, 500) // Check every 500ms
+
     // Use MutationObserver to detect when video player is added to DOM
     const observer = new MutationObserver((mutations) => {
       const videoPlayer = document.querySelector('video')
