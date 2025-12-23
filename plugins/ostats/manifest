@@ -1,0 +1,14 @@
+id: ostats
+name: O Stats
+metadata:
+  description: Adds O stats to the stats page
+version: 1.0
+date: '2025-12-23 00:00:00'
+requires: []
+source_repository: https://github.com/sanjiswe/stash_ostats
+files:
+  - ostats.js
+  - README.md
+  - ostats.yml
+  - load_watch_data.py
+  - save_watch_data.py
