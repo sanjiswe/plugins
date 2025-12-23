@@ -1,0 +1,2897 @@
+;(function () {
+  // ===== WATCH TIME TRACKING =====
+  // This section tracks actual play time per day similar to Stash's track-activity plugin
+
+  const WATCH_HISTORY_FILE = 'watch_data.json'
+  const TRACKING_INTERVAL = 10000 // Track every 10 seconds
+  const SAVE_INTERVAL = 5000 // Save every 5 seconds
+
+  // In-memory cache of watch data
+  let watchDataCache = null
+  let watchDataLoaded = false
+  let lastSaveTimestamp = 0 // Track when we last saved to detect stale data
+  let isSaving = false // Prevent concurrent saves
+  let pendingSavePromise = null // Track in-flight save operations
+
+  let trackingIntervalId = null
+  let currentSessionTime = 0
+  let lastSaveTime = 0
+  let trackingStartTime = 0 // Track when playback started
+  let currentSceneInfo = null // Track current scene being watched
+
+  // Get today's date in YYYY-MM-DD format
+  function getTodayDate() {
+    const now = new Date()
+    return now.toLocaleDateString('en-CA') // YYYY-MM-DD format
+  }
+
+  // Extract scene info from current page
+  function getCurrentSceneInfo() {
+    const path = window.location.pathname
+    const match = path.match(/\/scenes\/(\d+)/)
+    if (!match) return null
+
+    const sceneId = match[1]
+
+    // Try multiple methods to get title
+    let title = null
+
+    // Method 1: Try h2 in the scene page
+    const h2Element = document.querySelector(
+      '.scene-header h2, h2.scene-header__title, h2'
+    )
+    if (h2Element) {
+      title = h2Element.textContent.trim()
+    }
+
+    // Method 2: Try title tag and strip " | Scenes | Stash"
+    if (!title || title === '') {
+      const titleTag = document.title
+      if (titleTag && titleTag !== 'Stash') {
+        // Split by pipe and take first part
+        title = titleTag.split('|')[0].trim()
+      }
+    }
+
+    // Fallback
+    if (!title || title === '') {
+      title = `Scene ${sceneId}`
+    }
+
+    return { id: sceneId, title: title }
+  }
+
+  // Load watch time data from Stash configuration (syncs across devices)
+  async function loadWatchTimeData() {
+    // Return cached data if already loaded
+    if (watchDataLoaded && watchDataCache !== null) {
+      console.log('[OStats] Returning cached data')
+      return watchDataCache
+    }
+
+    try {
+      // Load data directly from the JSON file via HTTP
+      // Add timestamp to prevent browser caching of stale data
+      const url = `/plugin/ostats/assets/watch_data.json?t=${Date.now()}`
+      console.log('[OStats] Fetching from:', url)
+      const response = await fetch(url, {
+        cache: 'no-store', // Force bypass of browser cache
+        headers: {
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+        },
+      })
+      console.log(
+        '[OStats] Response status:',
+        response.status,
+        response.statusText
+      )
+
+      if (response.ok) {
+        const watchData = await response.json()
+
+        // CRITICAL: Only update cache if loaded data is newer or equal
+        // Check if we have cached data with more recent information
+        if (watchDataCache && Object.keys(watchDataCache).length > 0) {
+          const today = getTodayDate()
+          // Simple format: just numbers
+          const cachedTodayTime = watchDataCache[today] || 0
+          const loadedTodayTime = watchData[today] || 0
+
+          // If cached data has more watch time for today, keep it (it's fresher)
+          if (cachedTodayTime > loadedTodayTime) {
+            console.warn(
+              `[OStats] Loaded data appears stale (${loadedTodayTime}s < ${cachedTodayTime}s cached). Keeping cached data.`
+            )
+            watchDataLoaded = true
+            return watchDataCache
+          }
+        }
+
+        watchDataCache = watchData
+        watchDataLoaded = true
+        console.log(
+          '[OStats] Loaded watch history from JSON file, total days:',
+          Object.keys(watchData).length
+        )
+        return watchDataCache
+      } else if (response.status === 404) {
+        // Only cache empty data on 404 if we don't have existing cache
+        if (watchDataCache && Object.keys(watchDataCache).length > 0) {
+          console.warn(
+            '[OStats] File not found but have cached data, keeping cache'
+          )
+          watchDataLoaded = true
+          return watchDataCache
+        }
+        console.log('[OStats] No watch history file found, starting fresh')
+        watchDataCache = {}
+        watchDataLoaded = true
+        return watchDataCache
+      } else {
+        console.error('[OStats] Failed to load watch history:', response.status)
+        // Return cached data if available, even if stale
+        if (watchDataCache !== null) {
+          console.warn('[OStats] Using cached data due to load failure')
+          return watchDataCache
+        }
+      }
+    } catch (e) {
+      console.error('[OStats] Error loading watch history:', e)
+      // Return cached data if available, even if stale
+      if (watchDataCache !== null) {
+        console.warn('[OStats] Using cached data due to error')
+        return watchDataCache
+      }
+    }
+
+    // Only reach here if load failed AND no cache exists
+    // This is dangerous - don't cache this empty state
+    console.error(
+      '[OStats] Failed to load watch history and no cache available - using empty data (NOT cached)'
+    )
+    return {}
+  }
+
+  // Save watch time data to JSON file via Python task
+  async function saveWatchTimeData(data) {
+    // If a save is in progress, wait for it to complete first
+    if (isSaving && pendingSavePromise) {
+      console.log('[OStats] Waiting for previous save to complete')
+      await pendingSavePromise
+    }
+
+    // Safety check: don't save empty data if we have cached data
+    if (
+      Object.keys(data).length === 0 &&
+      watchDataCache &&
+      Object.keys(watchDataCache).length > 0
+    ) {
+      console.error(
+        '[OStats] Refusing to save empty data - cached data exists!'
+      )
+      return
+    }
+
+    isSaving = true
+    pendingSavePromise = (async () => {
+      try {
+        const today = getTodayDate()
+        const todaysTotal = data[today] || 0
+        console.log('[OStats] Saving data, todays total:', todaysTotal)
+
+        const result = await csLib
+          .callGQL({
+            query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
+          runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
+        }`,
+            variables: {
+              plugin_id: 'ostats',
+              task_name: 'saveWatchData',
+              args_map: {
+                watch_data: JSON.stringify(data),
+              },
+            },
+          })
+          .catch((err) => {
+            console.error('[OStats] GraphQL Error:', err)
+            console.error(
+              '[OStats] Error details:',
+              JSON.stringify(err, null, 2)
+            )
+            throw err
+          })
+
+        // Update cache after successful save
+        watchDataCache = data
+        watchDataLoaded = true
+        lastSaveTimestamp = Date.now()
+
+        console.log('[OStats] Watch history saved to JSON file')
+      } catch (e) {
+        console.error('[OStats] Error saving watch time data:', e)
+        throw e
+      }
+    })()
+
+    try {
+      await pendingSavePromise
+    } finally {
+      isSaving = false
+      pendingSavePromise = null
+    }
+  }
+
+  // Add watch time for today (simplified - just total time)
+  async function addWatchTime(seconds, sceneInfo) {
+    const data = await loadWatchTimeData()
+    const today = getTodayDate()
+
+    // Safety check: if data is empty and we don't have cache loaded, something went wrong
+    if (Object.keys(data).length === 0 && !watchDataLoaded) {
+      console.error(
+        '[OStats] Cannot add watch time - data load failed and no cache available. Skipping to prevent data loss.'
+      )
+      return
+    }
+
+    // Create a deep copy to avoid mutating the cache directly
+    const dataCopy = JSON.parse(JSON.stringify(data))
+
+    // Migrate old format to simple format if needed
+    if (
+      dataCopy[today] &&
+      typeof dataCopy[today] === 'object' &&
+      'totalTime' in dataCopy[today]
+    ) {
+      // Old format with videos array - extract just the total time
+      dataCopy[today] = dataCopy[today].totalTime || 0
+    }
+
+    // Initialize today's time if it doesn't exist
+    if (!dataCopy[today]) {
+      dataCopy[today] = 0
+    }
+
+    // Update total time (simple format - just a number)
+    dataCopy[today] += seconds
+
+    await saveWatchTimeData(dataCopy)
+  }
+
+  // Start tracking watch time
+  function startWatchTimeTracking() {
+    if (trackingIntervalId) return // Already tracking
+
+    currentSessionTime = 0
+    const now = Date.now()
+    lastSaveTime = now
+    trackingStartTime = now
+    currentSceneInfo = getCurrentSceneInfo() // Capture scene info
+
+    trackingIntervalId = setInterval(() => {
+      const now = Date.now()
+      const totalElapsed = Math.floor((now - trackingStartTime) / 1000)
+      const sinceSave = (now - lastSaveTime) / 1000
+
+      // Save every 5 seconds
+      if (sinceSave >= 5) {
+        const timeToSave = totalElapsed - currentSessionTime
+        if (timeToSave > 0) {
+          addWatchTime(timeToSave, currentSceneInfo)
+          const sceneLog = currentSceneInfo
+            ? ` (${currentSceneInfo.title})`
+            : ''
+          console.log(
+            `[OStats] Saved ${timeToSave}s watch time for ${getTodayDate()}${sceneLog}`
+          )
+          currentSessionTime = totalElapsed
+        }
+        lastSaveTime = now
+      }
+    }, TRACKING_INTERVAL)
+
+    const sceneLog = currentSceneInfo ? ` for "${currentSceneInfo.title}"` : ''
+    console.log(`[OStats] Started watch time tracking${sceneLog}`)
+  }
+
+  // Stop tracking watch time
+  async function stopWatchTimeTracking() {
+    if (trackingIntervalId) {
+      clearInterval(trackingIntervalId)
+      trackingIntervalId = null
+
+      // Calculate actual elapsed time and save any remaining time IMMEDIATELY
+      const now = Date.now()
+      // Safety check: only calculate if trackingStartTime is valid
+      if (trackingStartTime > 0) {
+        const totalElapsed = Math.floor((now - trackingStartTime) / 1000)
+        const remainingTime = totalElapsed - currentSessionTime
+
+        if (remainingTime > 0) {
+          await addWatchTime(remainingTime, currentSceneInfo)
+          const sceneLog = currentSceneInfo
+            ? ` (${currentSceneInfo.title})`
+            : ''
+          console.log(
+            `[OStats] Final save: ${remainingTime}s watch time for ${getTodayDate()}${sceneLog}`
+          )
+        }
+      }
+      currentSessionTime = 0
+      trackingStartTime = 0
+
+      // Wait for any pending saves to complete before clearing scene info
+      if (pendingSavePromise) {
+        console.log(
+          '[OStats] Waiting for pending save to complete before stopping'
+        )
+        await pendingSavePromise
+      }
+
+      currentSceneInfo = null // Clear scene info
+      console.log('[OStats] Stopped watch time tracking')
+    }
+  }
+
+  // Hook into video player events
+  function setupVideoPlayerTracking() {
+    // Use MutationObserver to detect when video player is added to DOM
+    const observer = new MutationObserver((mutations) => {
+      const videoPlayer = document.querySelector('video')
+      if (videoPlayer && !videoPlayer.dataset.ostatsTracking) {
+        videoPlayer.dataset.ostatsTracking = 'true'
+
+        videoPlayer.addEventListener('playing', () => {
+          console.log('[OStats] Video playing')
+          startWatchTimeTracking()
+        })
+
+        videoPlayer.addEventListener('pause', async () => {
+          console.log('[OStats] Video paused')
+          await stopWatchTimeTracking()
+        })
+
+        videoPlayer.addEventListener('ended', async () => {
+          console.log('[OStats] Video ended')
+          // Force immediate save of any remaining time
+          await stopWatchTimeTracking()
+          // Give the save operation a moment to complete
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        })
+
+        videoPlayer.addEventListener('waiting', async () => {
+          console.log('[OStats] Video waiting/buffering')
+          await stopWatchTimeTracking()
+        })
+
+        videoPlayer.addEventListener('stalled', async () => {
+          console.log('[OStats] Video stalled')
+          await stopWatchTimeTracking()
+        })
+
+        console.log('[OStats] Video player tracking setup complete')
+      }
+    })
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    })
+
+    // Also check if video is already present
+    const existingVideo = document.querySelector('video')
+    if (existingVideo && !existingVideo.dataset.ostatsTracking) {
+      existingVideo.dataset.ostatsTracking = 'true'
+
+      existingVideo.addEventListener('playing', startWatchTimeTracking)
+      existingVideo.addEventListener(
+        'pause',
+        async () => await stopWatchTimeTracking()
+      )
+      existingVideo.addEventListener('ended', async () => {
+        console.log('[OStats] Video ended (existing)')
+        // Force immediate save of any remaining time
+        await stopWatchTimeTracking()
+        // Give the save operation a moment to complete
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      })
+      existingVideo.addEventListener(
+        'waiting',
+        async () => await stopWatchTimeTracking()
+      )
+      existingVideo.addEventListener(
+        'stalled',
+        async () => await stopWatchTimeTracking()
+      )
+
+      // Check if video is already playing
+      if (!existingVideo.paused) {
+        startWatchTimeTracking()
+      }
+    }
+  }
+
+  // Initialize video player tracking on page load
+  setupVideoPlayerTracking()
+
+  // Save any remaining watch time before page unload
+  window.addEventListener('beforeunload', (e) => {
+    if (currentSessionTime > 0 || trackingIntervalId) {
+      console.log('[OStats] Page unloading, saving watch time...')
+      // Stop tracking synchronously to save remaining time
+      if (trackingIntervalId) {
+        clearInterval(trackingIntervalId)
+        trackingIntervalId = null
+      }
+      // Add remaining time immediately (synchronous)
+      if (currentSessionTime > 0) {
+        const data = watchDataCache || {}
+        const today = getTodayDate()
+
+        // Migrate old format if needed
+        if (
+          data[today] &&
+          typeof data[today] === 'object' &&
+          'totalTime' in data[today]
+        ) {
+          data[today] = data[today].totalTime || 0
+        }
+
+        // Simple format: just add to the number
+        if (!data[today]) {
+          data[today] = 0
+        }
+        data[today] += currentSessionTime
+
+        watchDataCache = data
+        // Try to use sendBeacon for more reliable save on unload
+        try {
+          navigator.sendBeacon(
+            '/graphql',
+            JSON.stringify({
+              query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
+              runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
+            }`,
+              variables: {
+                plugin_id: 'ostats',
+                task_name: 'saveWatchData',
+                args_map: { watch_data: JSON.stringify(data) },
+              },
+            })
+          )
+        } catch (err) {
+          console.error('[OStats] Failed to send beacon:', err)
+        }
+        console.log(`[OStats] Beforeunload: saved ${currentSessionTime}s`)
+        currentSessionTime = 0
+      }
+    }
+  })
+
+  // Also listen for visibility changes (tab switching, minimizing)
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden && trackingIntervalId) {
+      console.log('[OStats] Page hidden, stopping tracking')
+      await stopWatchTimeTracking()
+    }
+  })
+
+  // ===== END WATCH TIME TRACKING =====
+
+  function createStatElement(container, title, heading) {
+    const statEl = document.createElement('div')
+    statEl.classList.add('stats-element')
+    container.appendChild(statEl)
+
+    const statTitle = document.createElement('p')
+    statTitle.classList.add('title')
+    statTitle.innerText = title
+    statEl.appendChild(statTitle)
+
+    const statHeading = document.createElement('p')
+    statHeading.classList.add('heading')
+    statHeading.innerText = heading
+    statEl.appendChild(statHeading)
+  }
+
+  function createImageStatElement(container, scene, title, heading) {
+    const statEl = document.createElement('div')
+    statEl.classList.add('stats-element')
+    statEl.style.maxWidth = '250px'
+    statEl.style.textAlign = 'center'
+    container.appendChild(statEl)
+
+    const link = document.createElement('a')
+    link.href = `/scenes/${scene.id}`
+    link.style.textDecoration = 'none'
+    link.style.display = 'block'
+    statEl.appendChild(link)
+
+    const imgContainer = document.createElement('div')
+    imgContainer.style.width = '100%'
+    imgContainer.style.height = '140px'
+    imgContainer.style.backgroundColor = '#000'
+    imgContainer.style.borderRadius = '4px'
+    imgContainer.style.marginBottom = '0.5rem'
+    imgContainer.style.display = 'flex'
+    imgContainer.style.alignItems = 'center'
+    imgContainer.style.justifyContent = 'center'
+    imgContainer.style.overflow = 'hidden'
+    link.appendChild(imgContainer)
+
+    const img = document.createElement('img')
+    img.src = scene.paths.screenshot
+    img.style.maxWidth = '100%'
+    img.style.maxHeight = '100%'
+    img.style.objectFit = 'contain'
+    img.style.display = 'block'
+    imgContainer.appendChild(img)
+
+    const statTitle = document.createElement('p')
+    statTitle.classList.add('title')
+    statTitle.innerText = title
+    statTitle.style.margin = '0'
+    statTitle.style.fontSize = '0.9rem'
+    link.appendChild(statTitle)
+
+    const statHeading = document.createElement('p')
+    statHeading.classList.add('heading')
+    statHeading.innerText = heading
+    statHeading.style.margin = '0'
+    statHeading.style.fontSize = '0.85rem'
+    link.appendChild(statHeading)
+  }
+
+  function createGalleryImageStatElement(container, image, title, heading) {
+    const statEl = document.createElement('div')
+    statEl.classList.add('stats-element')
+    statEl.style.maxWidth = '250px'
+    statEl.style.textAlign = 'center'
+    container.appendChild(statEl)
+
+    const link = document.createElement('a')
+    link.href = `/images/${image.id}`
+    link.style.textDecoration = 'none'
+    link.style.display = 'block'
+    statEl.appendChild(link)
+
+    const imgContainer = document.createElement('div')
+    imgContainer.style.width = '100%'
+    imgContainer.style.height = '140px'
+    imgContainer.style.backgroundColor = '#000'
+    imgContainer.style.borderRadius = '4px'
+    imgContainer.style.marginBottom = '0.5rem'
+    imgContainer.style.display = 'flex'
+    imgContainer.style.alignItems = 'center'
+    imgContainer.style.justifyContent = 'center'
+    imgContainer.style.overflow = 'hidden'
+    link.appendChild(imgContainer)
+
+    const img = document.createElement('img')
+    img.src = image.paths.image
+    img.style.maxWidth = '100%'
+    img.style.maxHeight = '100%'
+    img.style.objectFit = 'contain'
+    img.style.display = 'block'
+    imgContainer.appendChild(img)
+
+    const statTitle = document.createElement('p')
+    statTitle.classList.add('title')
+    statTitle.innerText = title
+    statTitle.style.margin = '0'
+    statTitle.style.fontSize = '0.9rem'
+    link.appendChild(statTitle)
+
+    const statHeading = document.createElement('p')
+    statHeading.classList.add('heading')
+    statHeading.innerText = heading
+    statHeading.style.margin = '0'
+    statHeading.style.fontSize = '0.85rem'
+    link.appendChild(statHeading)
+  }
+
+  // fetch all scenes with o_history for orgasm stats
+  async function getScenesWithOHistory() {
+    const query = `query {
+      findScenes(scene_filter: {}, filter: { per_page: -1 }) {
+        scenes {
+          id
+          title
+          o_counter
+          o_history
+          play_duration
+          play_history
+          files {
+            basename
+          }
+          paths {
+            screenshot
+          }
+        }
+      }
+    }`
+    return await csLib
+      .callGQL({ query })
+      .then((data) => data.findScenes?.scenes || [])
+  }
+
+  // fetch all images with o_counter
+  async function getImagesWithOCounter() {
+    const query = `query {
+      findImages(image_filter: {}, filter: { per_page: -1 }) {
+        images {
+          id
+          title
+          o_counter
+          paths {
+            image
+          }
+        }
+      }
+    }`
+    return await csLib
+      .callGQL({ query })
+      .then((data) => data.findImages?.images || [])
+  }
+
+  // orgasms today
+  async function createOrgasmsToday(row) {
+    const scenes = await getScenesWithOHistory()
+
+    // Get today in local timezone
+    const now = new Date()
+    const today = now.toLocaleDateString('en-CA') // YYYY-MM-DD format
+
+    let todayCount = 0
+
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        scene.o_history.forEach((timestamp) => {
+          // Skip invalid/undated O's
+          if (!timestamp) return
+
+          // Convert UTC timestamp to local timezone
+          const date = new Date(timestamp)
+          // Validate date
+          if (isNaN(date.getTime())) return
+
+          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+
+          if (day === today) {
+            todayCount++
+          }
+        })
+      }
+    })
+
+    createStatElement(row, `${todayCount} 💦`, "O's Today")
+  }
+
+  // record session - day with longest watch time
+  async function createWatchTimeToday(row) {
+    const watchTimeData = await loadWatchTimeData()
+
+    let maxDuration = 0
+    let maxDay = null
+
+    // Find day with most watch time
+    Object.keys(watchTimeData).forEach((day) => {
+      // Simplified format: just numbers (with migration from old format)
+      let duration = watchTimeData[day]
+      if (typeof duration === 'object' && 'totalTime' in duration) {
+        // Migrate old format
+        duration = duration.totalTime || 0
+      }
+      duration = duration || 0
+
+      if (duration > maxDuration) {
+        maxDuration = duration
+        maxDay = day
+      }
+    })
+
+    let title = '0m'
+    let heading = 'Record Session'
+
+    if (maxDay && maxDuration > 0) {
+      const hours = Math.floor(maxDuration / 3600)
+      const minutes = Math.floor((maxDuration % 3600) / 60)
+      const [year, month, day] = maxDay.split('-')
+      const formatted = `${month}/${day}/${year.slice(2)}`
+
+      if (hours > 0) {
+        title = `${hours}h ${minutes}m ⌛`
+      } else if (minutes > 0) {
+        title = `${minutes}m ⌛`
+      } else {
+        title = `${Math.floor(maxDuration)}s ⌛`
+      }
+      heading = `Record Session: ${formatted}`
+    }
+
+    createStatElement(row, title, heading)
+  }
+
+  // Export/Import watch time data as JSON
+  function createWatchTimeExportButton(row) {
+    const container = document.createElement('div')
+    container.style.display = 'flex'
+    container.style.gap = '1rem'
+    container.style.justifyContent = 'center'
+    container.style.alignItems = 'center'
+    container.style.marginTop = '2rem'
+    row.appendChild(container)
+
+    // JSON Export Button
+    const jsonBtn = document.createElement('button')
+    jsonBtn.innerText = '💾 Export JSON'
+    jsonBtn.style.padding = '0.5rem 1rem'
+    jsonBtn.style.cursor = 'pointer'
+    jsonBtn.style.border = '1px solid #555'
+    jsonBtn.style.backgroundColor = 'transparent'
+    jsonBtn.style.color = '#fff'
+    jsonBtn.style.borderRadius = '4px'
+    jsonBtn.style.fontSize = '1rem'
+    container.appendChild(jsonBtn)
+
+    jsonBtn.addEventListener('click', async () => {
+      jsonBtn.disabled = true
+      jsonBtn.innerText = '⏳ Exporting...'
+
+      try {
+        const watchTimeData = await loadWatchTimeData()
+
+        // Clean data for export
+        const cleanedData = {}
+        Object.keys(watchTimeData).forEach((day) => {
+          const dayData = watchTimeData[day]
+          if (typeof dayData === 'number') {
+            // Already in simple format
+            cleanedData[day] = dayData
+          } else if (typeof dayData === 'object' && 'totalTime' in dayData) {
+            // Old format with videos - migrate to simple format
+            cleanedData[day] = dayData.totalTime || 0
+          } else {
+            // Unknown format
+            cleanedData[day] = 0
+          }
+        })
+
+        // Create JSON with metadata
+        const exportData = {
+          version: '2.0',
+          exported: new Date().toISOString(),
+          data: cleanedData,
+          totalDays: Object.keys(cleanedData).length,
+          totalSeconds: Object.values(cleanedData).reduce((sum, dayData) => {
+            // Simplified format: just numbers
+            return sum + (typeof dayData === 'number' ? dayData : 0)
+          }, 0),
+        }
+
+        // Create download link
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+          type: 'application/json',
+        })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `ostats-watch-time-${new Date()
+          .toISOString()
+          .slice(0, 10)}.json`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+
+        jsonBtn.innerText = '✓ Exported!'
+        setTimeout(() => {
+          jsonBtn.innerText = '💾 Export JSON'
+          jsonBtn.disabled = false
+        }, 2000)
+      } catch (error) {
+        console.error('Export failed:', error)
+        jsonBtn.innerText = '✗ Export Failed'
+        setTimeout(() => {
+          jsonBtn.innerText = '💾 Export JSON'
+          jsonBtn.disabled = false
+        }, 2000)
+      }
+    })
+
+    // Import JSON Button
+    const importBtn = document.createElement('button')
+    importBtn.innerText = '📥 Import JSON'
+    importBtn.style.padding = '0.5rem 1rem'
+    importBtn.style.cursor = 'pointer'
+    importBtn.style.border = '1px solid #555'
+    importBtn.style.backgroundColor = 'transparent'
+    importBtn.style.color = '#fff'
+    importBtn.style.borderRadius = '4px'
+    importBtn.style.fontSize = '1rem'
+    container.appendChild(importBtn)
+
+    // Help icon with tooltip (on the right)
+    const helpIcon = document.createElement('div')
+    helpIcon.style.width = '24px'
+    helpIcon.style.height = '24px'
+    helpIcon.style.borderRadius = '50%'
+    helpIcon.style.backgroundColor = '#555'
+    helpIcon.style.color = '#ccc'
+    helpIcon.style.display = 'flex'
+    helpIcon.style.alignItems = 'center'
+    helpIcon.style.justifyContent = 'center'
+    helpIcon.style.fontSize = '0.9rem'
+    helpIcon.style.fontWeight = 'bold'
+    helpIcon.style.cursor = 'help'
+    helpIcon.style.transition = 'background-color 0.2s, color 0.2s'
+    helpIcon.innerText = '?'
+    helpIcon.title =
+      'Watch time data is stored on your Stash server and syncs across all devices. Use Export to backup your data to a JSON file and Import to restore it.'
+
+    helpIcon.addEventListener('mouseenter', () => {
+      helpIcon.style.backgroundColor = '#666'
+      helpIcon.style.color = '#fff'
+    })
+    helpIcon.addEventListener('mouseleave', () => {
+      helpIcon.style.backgroundColor = '#555'
+      helpIcon.style.color = '#ccc'
+    })
+
+    container.appendChild(helpIcon)
+
+    importBtn.addEventListener('click', () => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.json'
+
+      input.onchange = async (e) => {
+        const file = e.target.files[0]
+        if (!file) return
+
+        importBtn.disabled = true
+        importBtn.innerText = '⏳ Importing...'
+
+        try {
+          const text = await file.text()
+          const importData = JSON.parse(text)
+
+          // Determine if this is wrapped format (with "data" property) or direct format
+          let dataToImport
+          if (importData.data && typeof importData.data === 'object') {
+            // New export format with wrapper
+            dataToImport = importData.data
+            console.log(
+              '[OStats] Importing data from wrapped format, total days:',
+              Object.keys(dataToImport).length
+            )
+          } else if (
+            importData.version === undefined &&
+            typeof importData === 'object'
+          ) {
+            // Old direct format (just the watch data object)
+            dataToImport = importData
+            console.log(
+              '[OStats] Importing data from direct format, total days:',
+              Object.keys(dataToImport).length
+            )
+          } else {
+            throw new Error('Invalid file format')
+          }
+
+          console.log(
+            '[OStats] Importing data sample:',
+            JSON.stringify(dataToImport).substring(0, 200)
+          )
+
+          // Delete all local data and replace with imported data
+          await saveWatchTimeData(dataToImport)
+
+          // Wait a bit for file write to complete
+          await new Promise((resolve) => setTimeout(resolve, 500))
+
+          // Clear cache BEFORE verification to force fresh load from file
+          watchDataCache = null
+          watchDataLoaded = false
+
+          // Verify the save by loading it back
+          const verifyData = await loadWatchTimeData()
+          console.log(
+            '[OStats] Verification after import, total days:',
+            Object.keys(verifyData).length
+          )
+          console.log(
+            '[OStats] Verify data sample:',
+            JSON.stringify(verifyData).substring(0, 200)
+          )
+
+          importBtn.innerText = '✓ Imported!'
+          setTimeout(() => {
+            importBtn.innerText = '📥 Import JSON'
+            importBtn.disabled = false
+            // Reload page to show new data - wait longer to ensure save completes
+            window.location.reload()
+          }, 2000)
+        } catch (error) {
+          console.error('Import failed:', error)
+          importBtn.innerText = '✗ Import Failed'
+          setTimeout(() => {
+            importBtn.innerText = '📥 Import JSON'
+            importBtn.disabled = false
+          }, 2000)
+        }
+      }
+
+      input.click()
+    })
+  }
+
+  // day with most orgasms
+  async function createBestOrgasmDay(row) {
+    const scenes = await getScenesWithOHistory()
+    const dayTotals = {}
+
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        scene.o_history.forEach((timestamp) => {
+          // Skip invalid/undated O's
+          if (!timestamp) return
+
+          // Convert UTC timestamp to local timezone
+          const date = new Date(timestamp)
+          // Validate date
+          if (isNaN(date.getTime())) return
+
+          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+          dayTotals[day] = (dayTotals[day] || 0) + 1
+        })
+      }
+    })
+
+    const maxCount = Math.max(0, ...Object.values(dayTotals))
+    const bestDay = Object.keys(dayTotals).find(
+      (day) => dayTotals[day] === maxCount
+    )
+
+    let heading = maxCount.toString()
+    let title = 'Record Day'
+    if (bestDay) {
+      const [year, month, day] = bestDay.split('-')
+      const formatted = `${month}/${day}/${year.slice(2)}`
+      heading = `Record Day: ${formatted}`
+      title = `${maxCount} ☔`
+    }
+    createStatElement(row, title, heading)
+  }
+
+  // consecutive days streak
+  async function createOrgasmStreak(row) {
+    const scenes = await getScenesWithOHistory()
+    const daySet = new Set()
+
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        scene.o_history.forEach((timestamp) => {
+          // Skip invalid/undated O's
+          if (!timestamp) return
+
+          // Convert UTC timestamp to local timezone
+          const date = new Date(timestamp)
+          // Validate date
+          if (isNaN(date.getTime())) return
+
+          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+          daySet.add(day)
+        })
+      }
+    })
+
+    const sortedDays = Array.from(daySet).sort().reverse()
+    let streak = 0
+    // Get today in local timezone
+    const now = new Date()
+    const todayStr = now.toLocaleDateString('en-CA')
+    const hasOToday = daySet.has(todayStr)
+
+    // If no O today, start checking from yesterday
+    const startOffset = hasOToday ? 0 : 1
+
+    for (let i = 0; i < sortedDays.length; i++) {
+      // Calculate expected date string
+      const expectedDate = new Date(now)
+      expectedDate.setDate(now.getDate() - (i + startOffset))
+      const expectedDateStr = expectedDate.toLocaleDateString('en-CA')
+
+      if (sortedDays[i] === expectedDateStr) {
+        streak++
+      } else {
+        break
+      }
+    }
+
+    // Show tombstone if there's a streak but no O today (streak will be lost)
+    let displayStreak
+    if (streak > 0 && !hasOToday) {
+      displayStreak = streak > 1 ? `${streak} 🪦` : `${streak} 🪦`
+    } else {
+      displayStreak = streak > 1 ? `${streak} 🔥` : streak
+    }
+    createStatElement(row, displayStreak, 'O Streak (days)')
+  }
+
+  // longest watched day
+  async function createLongestWatchedDay(row) {
+    const scenes = await getScenesWithOHistory()
+    const dayTotals = {}
+
+    // Calculate total watch time per day
+    scenes.forEach((scene) => {
+      if (scene.play_history && scene.play_history.length > 0) {
+        scene.play_history.forEach((timestamp) => {
+          // Convert UTC timestamp to local timezone
+          const date = new Date(timestamp)
+          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+
+          if (scene.play_duration && scene.play_duration > 0) {
+            const durationPerPlay =
+              scene.play_duration / scene.play_history.length
+            dayTotals[day] = (dayTotals[day] || 0) + durationPerPlay
+          }
+        })
+      }
+    })
+
+    let maxDuration = 0
+    let maxDay = null
+
+    Object.keys(dayTotals).forEach((day) => {
+      if (dayTotals[day] > maxDuration) {
+        maxDuration = dayTotals[day]
+        maxDay = day
+      }
+    })
+
+    let title = '0m'
+    let heading = 'Record Session'
+    if (maxDay) {
+      const hours = Math.floor(maxDuration / 3600)
+      const minutes = Math.floor((maxDuration % 3600) / 60)
+      const [year, month, day] = maxDay.split('-')
+      const formatted = `${month}/${day}/${year.slice(2)}`
+
+      if (hours > 0) {
+        title = `${hours}h ${minutes}m ⌛`
+      } else if (minutes > 0) {
+        title = `${minutes}m ⌛`
+      } else {
+        title = `${Math.floor(maxDuration)}s ⌛`
+      }
+      heading = `Record Session: ${formatted}`
+    }
+
+    createStatElement(row, title, heading)
+  }
+
+  // scene with most orgasms
+  async function createMostOScene(row) {
+    const scenes = await getScenesWithOHistory()
+    let maxScene = null
+    let maxCount = 0
+
+    scenes.forEach((scene) => {
+      const count = scene.o_counter || 0
+      if (count > maxCount) {
+        maxCount = count
+        maxScene = scene
+      }
+    })
+
+    if (maxScene) {
+      createImageStatElement(row, maxScene, maxCount, "Scene with Most O's")
+    } else {
+      createStatElement(row, 'N/A', "Scene with Most O's")
+    }
+  }
+
+  // longest watched scene
+  async function createLongestWatchedScene(row) {
+    const scenes = await getScenesWithOHistory()
+    let maxScene = null
+    let maxDuration = 0
+
+    scenes.forEach((scene) => {
+      const duration = scene.play_duration || 0
+      if (duration > maxDuration) {
+        maxDuration = duration
+        maxScene = scene
+      }
+    })
+
+    if (maxScene) {
+      const hours = Math.floor(maxDuration / 3600)
+      const minutes = Math.floor((maxDuration % 3600) / 60)
+      const seconds = Math.floor(maxDuration % 60)
+      let timeStr = ''
+      if (hours > 0) {
+        timeStr = `${hours}h ${minutes}m`
+      } else if (minutes > 0) {
+        timeStr = `${minutes}m ${seconds}s`
+      } else {
+        timeStr = `${seconds}s`
+      }
+      createImageStatElement(row, maxScene, timeStr, 'Longest Play Duration')
+    } else {
+      createStatElement(row, 'N/A', 'Longest Play Duration')
+    }
+  }
+
+  // image with most orgasms
+  async function createMostOImage(row) {
+    const images = await getImagesWithOCounter()
+    let maxImage = null
+    let maxCount = 0
+
+    images.forEach((image) => {
+      const count = image.o_counter || 0
+      if (count > maxCount) {
+        maxCount = count
+        maxImage = image
+      }
+    })
+
+    if (maxImage && maxCount > 0) {
+      createGalleryImageStatElement(
+        row,
+        maxImage,
+        maxCount,
+        "Image with Most O's"
+      )
+    }
+  }
+
+  // most recent O scene
+  async function createMostRecentOScene(row) {
+    const scenes = await getScenesWithOHistory()
+    let recentScene = null
+    let recentTimestamp = null
+
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        // Filter out invalid timestamps
+        const validTimestamps = scene.o_history.filter((t) => {
+          if (!t) return false
+          const date = new Date(t)
+          return !isNaN(date.getTime())
+        })
+
+        if (validTimestamps.length === 0) return
+
+        const mostRecent = validTimestamps.sort().reverse()[0]
+        if (!recentTimestamp || mostRecent > recentTimestamp) {
+          recentTimestamp = mostRecent
+          recentScene = scene
+        }
+      }
+    })
+
+    if (recentScene) {
+      const date = new Date(recentTimestamp)
+      const timeAgo = formatTimeAgo(date)
+      createImageStatElement(row, recentScene, timeAgo, 'Most Recent O')
+    }
+  }
+
+  // oldest O scene
+  async function createOldestOScene(row) {
+    const scenes = await getScenesWithOHistory()
+    let oldestScene = null
+    let oldestRecentTimestamp = null
+
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        // Filter out invalid timestamps
+        const validTimestamps = scene.o_history.filter((t) => {
+          if (!t) return false
+          const date = new Date(t)
+          return !isNaN(date.getTime())
+        })
+
+        if (validTimestamps.length === 0) return
+
+        // Get the most recent O for this scene
+        const mostRecent = validTimestamps.sort().reverse()[0]
+        if (!oldestRecentTimestamp || mostRecent < oldestRecentTimestamp) {
+          oldestRecentTimestamp = mostRecent
+          oldestScene = scene
+        }
+      }
+    })
+
+    if (oldestScene) {
+      const date = new Date(oldestRecentTimestamp)
+      const timeAgo = formatTimeAgo(date)
+      createImageStatElement(row, oldestScene, timeAgo, 'Oldest O')
+    }
+  }
+
+  // helper to format time ago
+  function formatTimeAgo(date) {
+    const now = new Date()
+    const diffMs = now - date
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMs / 3600000)
+    const diffDays = Math.floor(diffMs / 86400000)
+    const diffMonths = Math.floor(diffDays / 30)
+    const diffYears = Math.floor(diffDays / 365)
+
+    if (diffMins < 60) {
+      return `${diffMins}m ago`
+    } else if (diffHours < 24) {
+      return `${diffHours}h ago`
+    } else if (diffDays < 30) {
+      return `${diffDays}d ago`
+    } else if (diffMonths < 12) {
+      return `${diffMonths}mo ago`
+    } else {
+      return `${diffYears}y ago`
+    }
+  }
+
+  // weekly bar chart
+  async function createWeeklyBarChart(row) {
+    const scenes = await getScenesWithOHistory()
+
+    // Create chart container
+    const chartContainer = document.createElement('div')
+    chartContainer.style.width = '100%'
+    chartContainer.style.maxWidth = '800px'
+    chartContainer.style.margin = '0 auto'
+    chartContainer.style.padding = '1rem'
+    row.appendChild(chartContainer)
+
+    // Create header with title and buttons
+    const headerContainer = document.createElement('div')
+    headerContainer.style.display = 'flex'
+    headerContainer.style.justifyContent = 'space-between'
+    headerContainer.style.alignItems = 'center'
+    headerContainer.style.marginBottom = '1rem'
+    chartContainer.appendChild(headerContainer)
+
+    const chartTitle = document.createElement('h4')
+    chartTitle.innerText = `O'S`
+    chartTitle.style.textAlign = 'center'
+    chartTitle.style.fontSize = '1.2rem'
+    chartTitle.style.margin = '0'
+    headerContainer.appendChild(chartTitle)
+
+    // Create button container
+    const buttonContainer = document.createElement('div')
+    buttonContainer.style.display = 'flex'
+    buttonContainer.style.gap = '0.5rem'
+    headerContainer.appendChild(buttonContainer)
+
+    // Create view buttons
+    const weekBtn = document.createElement('button')
+    weekBtn.innerText = 'This Week'
+    weekBtn.style.padding = '0.25rem 0.75rem'
+    weekBtn.style.cursor = 'pointer'
+    weekBtn.style.border = '1px solid #007bff'
+    weekBtn.style.backgroundColor = '#007bff'
+    weekBtn.style.color = '#fff'
+    weekBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(weekBtn)
+
+    const monthBtn = document.createElement('button')
+    monthBtn.innerText = 'This Month'
+    monthBtn.style.padding = '0.25rem 0.75rem'
+    monthBtn.style.cursor = 'pointer'
+    monthBtn.style.border = '1px solid #555'
+    monthBtn.style.backgroundColor = 'transparent'
+    monthBtn.style.color = '#fff'
+    monthBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(monthBtn)
+
+    const yearBtn = document.createElement('button')
+    yearBtn.innerText = 'This Year'
+    yearBtn.style.padding = '0.25rem 0.75rem'
+    yearBtn.style.cursor = 'pointer'
+    yearBtn.style.border = '1px solid #555'
+    yearBtn.style.backgroundColor = 'transparent'
+    yearBtn.style.color = '#fff'
+    yearBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(yearBtn)
+
+    // Create bars container
+    const barsContainer = document.createElement('div')
+    barsContainer.style.display = 'flex'
+    barsContainer.style.alignItems = 'flex-end'
+    barsContainer.style.justifyContent = 'space-around'
+    barsContainer.style.height = '300px'
+    barsContainer.style.gap = '4px'
+    chartContainer.appendChild(barsContainer)
+
+    // Create week navigation (initially visible)
+    const weekNavContainer = document.createElement('div')
+    weekNavContainer.style.display = 'flex'
+    weekNavContainer.style.justifyContent = 'center'
+    weekNavContainer.style.alignItems = 'center'
+    weekNavContainer.style.gap = '1rem'
+    weekNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(weekNavContainer)
+
+    const prevWeekBtn = document.createElement('button')
+    prevWeekBtn.innerText = '← Prev'
+    prevWeekBtn.style.padding = '0.25rem 0.75rem'
+    prevWeekBtn.style.cursor = 'pointer'
+    prevWeekBtn.style.border = '1px solid #555'
+    prevWeekBtn.style.backgroundColor = 'transparent'
+    prevWeekBtn.style.color = '#fff'
+    prevWeekBtn.style.borderRadius = '4px'
+    weekNavContainer.appendChild(prevWeekBtn)
+
+    const weekLabel = document.createElement('span')
+    weekLabel.style.fontSize = '1rem'
+    weekLabel.style.fontWeight = 'bold'
+    weekNavContainer.appendChild(weekLabel)
+
+    const nextWeekBtn = document.createElement('button')
+    nextWeekBtn.innerText = 'Next →'
+    nextWeekBtn.style.padding = '0.25rem 0.75rem'
+    nextWeekBtn.style.cursor = 'pointer'
+    nextWeekBtn.style.border = '1px solid #555'
+    nextWeekBtn.style.backgroundColor = 'transparent'
+    nextWeekBtn.style.color = '#fff'
+    nextWeekBtn.style.borderRadius = '4px'
+    weekNavContainer.appendChild(nextWeekBtn)
+
+    // Create month navigation (initially hidden)
+    const monthNavContainer = document.createElement('div')
+    monthNavContainer.style.display = 'none'
+    monthNavContainer.style.justifyContent = 'center'
+    monthNavContainer.style.alignItems = 'center'
+    monthNavContainer.style.gap = '1rem'
+    monthNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(monthNavContainer)
+
+    const prevMonthBtn = document.createElement('button')
+    prevMonthBtn.innerText = '← Prev'
+    prevMonthBtn.style.padding = '0.25rem 0.75rem'
+    prevMonthBtn.style.cursor = 'pointer'
+    prevMonthBtn.style.border = '1px solid #555'
+    prevMonthBtn.style.backgroundColor = 'transparent'
+    prevMonthBtn.style.color = '#fff'
+    prevMonthBtn.style.borderRadius = '4px'
+    monthNavContainer.appendChild(prevMonthBtn)
+
+    const monthLabel = document.createElement('span')
+    monthLabel.style.fontSize = '1rem'
+    monthLabel.style.fontWeight = 'bold'
+    monthNavContainer.appendChild(monthLabel)
+
+    const nextMonthBtn = document.createElement('button')
+    nextMonthBtn.innerText = 'Next →'
+    nextMonthBtn.style.padding = '0.25rem 0.75rem'
+    nextMonthBtn.style.cursor = 'pointer'
+    nextMonthBtn.style.border = '1px solid #555'
+    nextMonthBtn.style.backgroundColor = 'transparent'
+    nextMonthBtn.style.color = '#fff'
+    nextMonthBtn.style.borderRadius = '4px'
+    monthNavContainer.appendChild(nextMonthBtn)
+
+    // Create year navigation (initially hidden)
+    const yearNavContainer = document.createElement('div')
+    yearNavContainer.style.display = 'none'
+    yearNavContainer.style.justifyContent = 'center'
+    yearNavContainer.style.alignItems = 'center'
+    yearNavContainer.style.gap = '1rem'
+    yearNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(yearNavContainer)
+
+    const prevYearBtn = document.createElement('button')
+    prevYearBtn.innerText = '\u2190 Prev'
+    prevYearBtn.style.padding = '0.25rem 0.75rem'
+    prevYearBtn.style.cursor = 'pointer'
+    prevYearBtn.style.border = '1px solid #555'
+    prevYearBtn.style.backgroundColor = 'transparent'
+    prevYearBtn.style.color = '#fff'
+    prevYearBtn.style.borderRadius = '4px'
+    yearNavContainer.appendChild(prevYearBtn)
+
+    const yearLabel = document.createElement('span')
+    yearLabel.style.fontSize = '1rem'
+    yearLabel.style.fontWeight = 'bold'
+    yearNavContainer.appendChild(yearLabel)
+
+    const nextYearBtn = document.createElement('button')
+    nextYearBtn.innerText = 'Next \u2192'
+    nextYearBtn.style.padding = '0.25rem 0.75rem'
+    nextYearBtn.style.cursor = 'pointer'
+    nextYearBtn.style.border = '1px solid #555'
+    nextYearBtn.style.backgroundColor = 'transparent'
+    nextYearBtn.style.color = '#fff'
+    nextYearBtn.style.borderRadius = '4px'
+    yearNavContainer.appendChild(nextYearBtn)
+
+    // Track selected week (0 = current week, -1 = prev week, etc.)
+    let selectedWeekOffset = 0
+    // Track selected month (0 = current month, -1 = prev month, etc.)
+    let selectedMonthOffset = 0
+    // Track selected year (0 = current year, -1 = prev year, etc.)
+    let selectedYearOffset = 0
+
+    // Function to render chart
+    function renderChart(view) {
+      // Update button styles
+      weekBtn.style.backgroundColor =
+        view === 'week' ? '#007bff' : 'transparent'
+      weekBtn.style.border =
+        view === 'week' ? '1px solid #007bff' : '1px solid #555'
+      monthBtn.style.backgroundColor =
+        view === 'month' ? '#007bff' : 'transparent'
+      monthBtn.style.border =
+        view === 'month' ? '1px solid #007bff' : '1px solid #555'
+      yearBtn.style.backgroundColor =
+        view === 'year' ? '#007bff' : 'transparent'
+      yearBtn.style.border =
+        view === 'year' ? '1px solid #007bff' : '1px solid #555'
+
+      // Show/hide week, month and year navigation
+      weekNavContainer.style.display = view === 'week' ? 'flex' : 'none'
+      monthNavContainer.style.display = view === 'month' ? 'flex' : 'none'
+      yearNavContainer.style.display = view === 'year' ? 'flex' : 'none'
+
+      // Get O counts for each day
+      const dayTotals = {}
+      scenes.forEach((scene) => {
+        if (scene.o_history && scene.o_history.length > 0) {
+          scene.o_history.forEach((timestamp) => {
+            // Skip invalid/undated O's
+            if (!timestamp) return
+
+            const date = new Date(timestamp)
+            // Validate date
+            if (isNaN(date.getTime())) return
+
+            const day = date.toLocaleDateString('en-CA')
+            dayTotals[day] = (dayTotals[day] || 0) + 1
+          })
+        }
+      })
+
+      const now = new Date()
+      let data = []
+
+      if (view === 'week') {
+        // Get Monday of selected week (current week + offset)
+        const dayOfWeek = now.getDay()
+        const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek // Adjust to Monday
+        const monday = new Date(now)
+        monday.setDate(now.getDate() + diff + selectedWeekOffset * 7)
+        monday.setHours(0, 0, 0, 0)
+
+        // Update week label
+        const sunday = new Date(monday)
+        sunday.setDate(monday.getDate() + 6)
+        const mondayStr = monday.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        })
+        const sundayStr = sunday.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        })
+        weekLabel.innerText = `${mondayStr} - ${sundayStr}`
+
+        // Disable next button if viewing current week
+        nextWeekBtn.disabled = selectedWeekOffset >= 0
+        nextWeekBtn.style.opacity = selectedWeekOffset >= 0 ? '0.5' : '1'
+        nextWeekBtn.style.cursor =
+          selectedWeekOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        for (let i = 0; i < 7; i++) {
+          const date = new Date(monday)
+          date.setDate(monday.getDate() + i)
+          const dayStr = date.toLocaleDateString('en-CA')
+          const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
+          const dayNum = date.getDate()
+          data.push({
+            date: dayStr,
+            count: dayTotals[dayStr] || 0,
+            label: `${weekday} ${dayNum}`,
+          })
+        }
+      } else if (view === 'month') {
+        // Current month (with offset) - from day 1 to last day
+        const targetDate = new Date(
+          now.getFullYear(),
+          now.getMonth() + selectedMonthOffset,
+          1
+        )
+        const firstDay = new Date(
+          targetDate.getFullYear(),
+          targetDate.getMonth(),
+          1
+        )
+        const lastDay = new Date(
+          targetDate.getFullYear(),
+          targetDate.getMonth() + 1,
+          0
+        )
+        const daysInMonth = lastDay.getDate()
+
+        // Update month label and button states
+        monthLabel.innerText = targetDate.toLocaleDateString('en-US', {
+          month: 'long',
+          year: 'numeric',
+        })
+        nextMonthBtn.disabled = selectedMonthOffset >= 0
+        nextMonthBtn.style.opacity = selectedMonthOffset >= 0 ? '0.5' : '1'
+        nextMonthBtn.style.cursor =
+          selectedMonthOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        for (let i = 1; i <= daysInMonth; i++) {
+          const date = new Date(
+            targetDate.getFullYear(),
+            targetDate.getMonth(),
+            i
+          )
+          const dayStr = date.toLocaleDateString('en-CA')
+          data.push({
+            date: dayStr,
+            count: dayTotals[dayStr] || 0,
+            label: i.toString(),
+          })
+        }
+      } else if (view === 'year') {
+        // Get month totals for selected year
+        const targetYear = now.getFullYear() + selectedYearOffset
+        const monthTotals = {}
+        Object.keys(dayTotals).forEach((dayStr) => {
+          const date = new Date(dayStr)
+          if (date.getFullYear() === targetYear) {
+            const month = date.getMonth()
+            monthTotals[month] = (monthTotals[month] || 0) + dayTotals[dayStr]
+          }
+        })
+
+        // Update year label and button states
+        yearLabel.innerText = targetYear.toString()
+        nextYearBtn.disabled = selectedYearOffset >= 0
+        nextYearBtn.style.opacity = selectedYearOffset >= 0 ? '0.5' : '1'
+        nextYearBtn.style.cursor =
+          selectedYearOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        const monthNames = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ]
+        for (let i = 0; i < 12; i++) {
+          data.push({
+            date: `${targetYear}-${i}`,
+            count: monthTotals[i] || 0,
+            label: monthNames[i],
+          })
+        }
+      }
+
+      const nonZeroCounts = data.filter((d) => d.count > 0).map((d) => d.count)
+      const maxCount = nonZeroCounts.length > 0 ? Math.max(...nonZeroCounts) : 1
+
+      // Clear and render bars
+      barsContainer.innerHTML = ''
+      data.forEach((item) => {
+        const barWrapper = document.createElement('div')
+        barWrapper.style.flex = '1'
+        barWrapper.style.display = 'flex'
+        barWrapper.style.flexDirection = 'column'
+        barWrapper.style.alignItems = 'center'
+        barWrapper.style.height = '100%'
+        barWrapper.style.justifyContent = 'flex-end'
+        barsContainer.appendChild(barWrapper)
+
+        const barContainer = document.createElement('div')
+        barContainer.style.width = '100%'
+        barContainer.style.display = 'flex'
+        barContainer.style.flexDirection = 'column'
+        barContainer.style.alignItems = 'center'
+        barContainer.style.justifyContent = 'flex-end'
+        barContainer.style.flex = '1'
+        barWrapper.appendChild(barContainer)
+
+        const bar = document.createElement('div')
+        const height = item.count > 0 ? (item.count / maxCount) * 100 : 0
+        bar.style.width = '100%'
+        bar.style.height = `${height}%`
+        bar.style.backgroundColor = '#007bff'
+        bar.style.borderRadius = '4px 4px 0 0'
+        bar.style.minHeight = item.count > 0 ? '4px' : '0'
+        bar.style.position = 'relative'
+        bar.style.cursor = item.count > 0 ? 'pointer' : 'default'
+        bar.style.transition = 'opacity 0.2s'
+        barContainer.appendChild(bar)
+
+        if (item.count > 0 && view !== 'year') {
+          bar.addEventListener('mouseenter', () => {
+            bar.style.opacity = '0.7'
+          })
+          bar.addEventListener('mouseleave', () => {
+            bar.style.opacity = '1'
+          })
+          bar.addEventListener('click', () => {
+            // Parse date string properly to avoid timezone issues
+            const dateParts = item.date.split('-')
+            const targetDate = new Date(
+              parseInt(dateParts[0]),
+              parseInt(dateParts[1]) - 1,
+              parseInt(dateParts[2])
+            )
+            const now = new Date()
+            const nowLocal = new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate()
+            )
+            const dayDiff = Math.round(
+              (targetDate - nowLocal) / (1000 * 60 * 60 * 24)
+            )
+
+            if (window.onThisDayRender) {
+              window.onThisDayRender(dayDiff)
+            }
+
+            const section = document.getElementById('on-this-day-section')
+            if (section) {
+              section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+          })
+        }
+
+        // Update cursor for year view or if no data
+        if (view === 'year' || item.count === 0) {
+          bar.style.cursor = 'default'
+        }
+
+        const countLabel = document.createElement('div')
+        countLabel.innerText = item.count
+        countLabel.style.fontSize = '0.9rem'
+        countLabel.style.fontWeight = 'bold'
+        countLabel.style.marginBottom = '4px'
+        countLabel.style.color = '#fff'
+        countLabel.style.visibility = item.count === 0 ? 'hidden' : 'visible'
+        barContainer.insertBefore(countLabel, bar)
+
+        const dayLabel = document.createElement('div')
+        dayLabel.innerText = item.label
+        dayLabel.style.fontSize = '0.85rem'
+        dayLabel.style.marginTop = '8px'
+        dayLabel.style.textAlign = 'center'
+        barWrapper.appendChild(dayLabel)
+      })
+    }
+
+    // Add button click handlers
+    weekBtn.addEventListener('click', async () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      await renderChart('week')
+    })
+    monthBtn.addEventListener('click', async () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      await renderChart('month')
+    })
+    yearBtn.addEventListener('click', async () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      await renderChart('year')
+    })
+
+    prevWeekBtn.addEventListener('click', async () => {
+      selectedWeekOffset--
+      await renderChart('week')
+    })
+
+    nextWeekBtn.addEventListener('click', async () => {
+      if (selectedWeekOffset < 0) {
+        selectedWeekOffset++
+        await renderChart('week')
+      }
+    })
+
+    prevMonthBtn.addEventListener('click', async () => {
+      selectedMonthOffset--
+      await renderChart('month')
+    })
+
+    nextMonthBtn.addEventListener('click', async () => {
+      if (selectedMonthOffset < 0) {
+        selectedMonthOffset++
+        await renderChart('month')
+      }
+    })
+
+    prevYearBtn.addEventListener('click', async () => {
+      selectedYearOffset--
+      await renderChart('year')
+    })
+
+    nextYearBtn.addEventListener('click', async () => {
+      if (selectedYearOffset < 0) {
+        selectedYearOffset++
+        await renderChart('year')
+      }
+    })
+
+    // Initial render
+    await renderChart('week')
+  }
+
+  // Watch Time Bar Chart
+  async function createWatchTimeBarChart(row) {
+    // Create chart container
+    const chartContainer = document.createElement('div')
+    chartContainer.style.width = '100%'
+    chartContainer.style.maxWidth = '800px'
+    chartContainer.style.margin = '0 auto'
+    chartContainer.style.padding = '1rem'
+    row.appendChild(chartContainer)
+
+    // Create header with title and buttons
+    const headerContainer = document.createElement('div')
+    headerContainer.style.display = 'flex'
+    headerContainer.style.justifyContent = 'space-between'
+    headerContainer.style.alignItems = 'center'
+    headerContainer.style.marginBottom = '1rem'
+    chartContainer.appendChild(headerContainer)
+
+    const chartTitle = document.createElement('h4')
+    chartTitle.innerText = 'WATCH TIME'
+    chartTitle.style.textAlign = 'center'
+    chartTitle.style.fontSize = '1.2rem'
+    chartTitle.style.margin = '0'
+    headerContainer.appendChild(chartTitle)
+
+    // Create button container
+    const buttonContainer = document.createElement('div')
+    buttonContainer.style.display = 'flex'
+    buttonContainer.style.gap = '0.5rem'
+    headerContainer.appendChild(buttonContainer)
+
+    // Create view buttons
+    const weekBtn = document.createElement('button')
+    weekBtn.innerText = 'This Week'
+    weekBtn.style.padding = '0.25rem 0.75rem'
+    weekBtn.style.cursor = 'pointer'
+    weekBtn.style.border = '1px solid #28a745'
+    weekBtn.style.backgroundColor = '#28a745'
+    weekBtn.style.color = '#fff'
+    weekBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(weekBtn)
+
+    const monthBtn = document.createElement('button')
+    monthBtn.innerText = 'This Month'
+    monthBtn.style.padding = '0.25rem 0.75rem'
+    monthBtn.style.cursor = 'pointer'
+    monthBtn.style.border = '1px solid #555'
+    monthBtn.style.backgroundColor = 'transparent'
+    monthBtn.style.color = '#fff'
+    monthBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(monthBtn)
+
+    const yearBtn = document.createElement('button')
+    yearBtn.innerText = 'This Year'
+    yearBtn.style.padding = '0.25rem 0.75rem'
+    yearBtn.style.cursor = 'pointer'
+    yearBtn.style.border = '1px solid #555'
+    yearBtn.style.backgroundColor = 'transparent'
+    yearBtn.style.color = '#fff'
+    yearBtn.style.borderRadius = '4px'
+    buttonContainer.appendChild(yearBtn)
+
+    // Create bars container
+    const barsContainer = document.createElement('div')
+    barsContainer.style.display = 'flex'
+    barsContainer.style.alignItems = 'flex-end'
+    barsContainer.style.justifyContent = 'space-around'
+    barsContainer.style.height = '300px'
+    barsContainer.style.gap = '4px'
+    chartContainer.appendChild(barsContainer)
+
+    // Create week navigation (initially visible)
+    const weekNavContainer = document.createElement('div')
+    weekNavContainer.style.display = 'flex'
+    weekNavContainer.style.justifyContent = 'center'
+    weekNavContainer.style.alignItems = 'center'
+    weekNavContainer.style.gap = '1rem'
+    weekNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(weekNavContainer)
+
+    const prevWeekBtn = document.createElement('button')
+    prevWeekBtn.innerText = '\u2190 Prev'
+    prevWeekBtn.style.padding = '0.25rem 0.75rem'
+    prevWeekBtn.style.cursor = 'pointer'
+    prevWeekBtn.style.border = '1px solid #555'
+    prevWeekBtn.style.backgroundColor = 'transparent'
+    prevWeekBtn.style.color = '#fff'
+    prevWeekBtn.style.borderRadius = '4px'
+    weekNavContainer.appendChild(prevWeekBtn)
+
+    const weekLabel = document.createElement('span')
+    weekLabel.style.fontSize = '1rem'
+    weekLabel.style.fontWeight = 'bold'
+    weekNavContainer.appendChild(weekLabel)
+
+    const nextWeekBtn = document.createElement('button')
+    nextWeekBtn.innerText = 'Next \u2192'
+    nextWeekBtn.style.padding = '0.25rem 0.75rem'
+    nextWeekBtn.style.cursor = 'pointer'
+    nextWeekBtn.style.border = '1px solid #555'
+    nextWeekBtn.style.backgroundColor = 'transparent'
+    nextWeekBtn.style.color = '#fff'
+    nextWeekBtn.style.borderRadius = '4px'
+    weekNavContainer.appendChild(nextWeekBtn)
+
+    // Create month navigation (initially hidden)
+    const monthNavContainer = document.createElement('div')
+    monthNavContainer.style.display = 'none'
+    monthNavContainer.style.justifyContent = 'center'
+    monthNavContainer.style.alignItems = 'center'
+    monthNavContainer.style.gap = '1rem'
+    monthNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(monthNavContainer)
+
+    const prevMonthBtn = document.createElement('button')
+    prevMonthBtn.innerText = '\u2190 Prev'
+    prevMonthBtn.style.padding = '0.25rem 0.75rem'
+    prevMonthBtn.style.cursor = 'pointer'
+    prevMonthBtn.style.border = '1px solid #555'
+    prevMonthBtn.style.backgroundColor = 'transparent'
+    prevMonthBtn.style.color = '#fff'
+    prevMonthBtn.style.borderRadius = '4px'
+    monthNavContainer.appendChild(prevMonthBtn)
+
+    const monthLabel = document.createElement('span')
+    monthLabel.style.fontSize = '1rem'
+    monthLabel.style.fontWeight = 'bold'
+    monthNavContainer.appendChild(monthLabel)
+
+    const nextMonthBtn = document.createElement('button')
+    nextMonthBtn.innerText = 'Next \u2192'
+    nextMonthBtn.style.padding = '0.25rem 0.75rem'
+    nextMonthBtn.style.cursor = 'pointer'
+    nextMonthBtn.style.border = '1px solid #555'
+    nextMonthBtn.style.backgroundColor = 'transparent'
+    nextMonthBtn.style.color = '#fff'
+    nextMonthBtn.style.borderRadius = '4px'
+    monthNavContainer.appendChild(nextMonthBtn)
+
+    // Create year navigation (initially hidden)
+    const yearNavContainer = document.createElement('div')
+    yearNavContainer.style.display = 'none'
+    yearNavContainer.style.justifyContent = 'center'
+    yearNavContainer.style.alignItems = 'center'
+    yearNavContainer.style.gap = '1rem'
+    yearNavContainer.style.marginTop = '0.5rem'
+    chartContainer.appendChild(yearNavContainer)
+
+    const prevYearBtn = document.createElement('button')
+    prevYearBtn.innerText = '\u2190 Prev'
+    prevYearBtn.style.padding = '0.25rem 0.75rem'
+    prevYearBtn.style.cursor = 'pointer'
+    prevYearBtn.style.border = '1px solid #555'
+    prevYearBtn.style.backgroundColor = 'transparent'
+    prevYearBtn.style.color = '#fff'
+    prevYearBtn.style.borderRadius = '4px'
+    yearNavContainer.appendChild(prevYearBtn)
+
+    const yearLabel = document.createElement('span')
+    yearLabel.style.fontSize = '1rem'
+    yearLabel.style.fontWeight = 'bold'
+    yearNavContainer.appendChild(yearLabel)
+
+    const nextYearBtn = document.createElement('button')
+    nextYearBtn.innerText = 'Next \u2192'
+    nextYearBtn.style.padding = '0.25rem 0.75rem'
+    nextYearBtn.style.cursor = 'pointer'
+    nextYearBtn.style.border = '1px solid #555'
+    nextYearBtn.style.backgroundColor = 'transparent'
+    nextYearBtn.style.color = '#fff'
+    nextYearBtn.style.borderRadius = '4px'
+    yearNavContainer.appendChild(nextYearBtn)
+
+    // Track selected week/month/year offsets
+    let selectedWeekOffset = 0
+    let selectedMonthOffset = 0
+    let selectedYearOffset = 0
+
+    // Function to format duration
+    function formatDuration(seconds) {
+      const hours = Math.floor(seconds / 3600)
+      const minutes = Math.floor((seconds % 3600) / 60)
+      if (hours > 0) {
+        return `${hours}h ${minutes}m`
+      } else if (minutes > 0) {
+        return `${minutes}m`
+      } else if (seconds > 0) {
+        return `${Math.floor(seconds)}s`
+      }
+      return '0m'
+    }
+
+    // Function to render chart
+    async function renderChart(view) {
+      // Update button styles
+      weekBtn.style.backgroundColor =
+        view === 'week' ? '#28a745' : 'transparent'
+      weekBtn.style.border =
+        view === 'week' ? '1px solid #28a745' : '1px solid #555'
+      monthBtn.style.backgroundColor =
+        view === 'month' ? '#28a745' : 'transparent'
+      monthBtn.style.border =
+        view === 'month' ? '1px solid #28a745' : '1px solid #555'
+      yearBtn.style.backgroundColor =
+        view === 'year' ? '#28a745' : 'transparent'
+      yearBtn.style.border =
+        view === 'year' ? '1px solid #28a745' : '1px solid #555'
+
+      // Show/hide week, month and year navigation
+      weekNavContainer.style.display = view === 'week' ? 'flex' : 'none'
+      monthNavContainer.style.display = view === 'month' ? 'flex' : 'none'
+      yearNavContainer.style.display = view === 'year' ? 'flex' : 'none'
+
+      // Get watch time data from our tracking system
+      const watchTimeData = await loadWatchTimeData()
+      // Convert to day totals, handling migration from old format
+      const dayTotals = {}
+      Object.keys(watchTimeData).forEach((day) => {
+        const dayData = watchTimeData[day]
+        if (typeof dayData === 'object' && 'totalTime' in dayData) {
+          // Migrate old format
+          dayTotals[day] = dayData.totalTime || 0
+        } else {
+          dayTotals[day] = dayData || 0
+        }
+      })
+
+      const now = new Date()
+      let data = []
+
+      if (view === 'week') {
+        // Get Monday of selected week
+        const dayOfWeek = now.getDay()
+        const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+        const monday = new Date(now)
+        monday.setDate(now.getDate() + diff + selectedWeekOffset * 7)
+        monday.setHours(0, 0, 0, 0)
+
+        // Update week label
+        const sunday = new Date(monday)
+        sunday.setDate(monday.getDate() + 6)
+        const mondayStr = monday.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        })
+        const sundayStr = sunday.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        })
+        weekLabel.innerText = `${mondayStr} - ${sundayStr}`
+
+        // Disable next button if viewing current week
+        nextWeekBtn.disabled = selectedWeekOffset >= 0
+        nextWeekBtn.style.opacity = selectedWeekOffset >= 0 ? '0.5' : '1'
+        nextWeekBtn.style.cursor =
+          selectedWeekOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        for (let i = 0; i < 7; i++) {
+          const date = new Date(monday)
+          date.setDate(monday.getDate() + i)
+          const dayStr = date.toLocaleDateString('en-CA')
+          const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
+          const dayNum = date.getDate()
+          data.push({
+            date: dayStr,
+            duration: dayTotals[dayStr] || 0,
+            label: `${weekday} ${dayNum}`,
+          })
+        }
+      } else if (view === 'month') {
+        // Current month with offset
+        const targetDate = new Date(
+          now.getFullYear(),
+          now.getMonth() + selectedMonthOffset,
+          1
+        )
+        const daysInMonth = new Date(
+          targetDate.getFullYear(),
+          targetDate.getMonth() + 1,
+          0
+        ).getDate()
+
+        // Update month label
+        monthLabel.innerText = targetDate.toLocaleDateString('en-US', {
+          month: 'long',
+          year: 'numeric',
+        })
+        nextMonthBtn.disabled = selectedMonthOffset >= 0
+        nextMonthBtn.style.opacity = selectedMonthOffset >= 0 ? '0.5' : '1'
+        nextMonthBtn.style.cursor =
+          selectedMonthOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        for (let i = 1; i <= daysInMonth; i++) {
+          const date = new Date(
+            targetDate.getFullYear(),
+            targetDate.getMonth(),
+            i
+          )
+          const dayStr = date.toLocaleDateString('en-CA')
+          data.push({
+            date: dayStr,
+            duration: dayTotals[dayStr] || 0,
+            label: i.toString(),
+          })
+        }
+      } else if (view === 'year') {
+        // Get month totals for selected year
+        const targetYear = now.getFullYear() + selectedYearOffset
+        const monthTotals = {}
+        Object.keys(dayTotals).forEach((dayStr) => {
+          const date = new Date(dayStr)
+          if (date.getFullYear() === targetYear) {
+            const month = date.getMonth()
+            monthTotals[month] = (monthTotals[month] || 0) + dayTotals[dayStr]
+          }
+        })
+
+        // Update year label
+        yearLabel.innerText = targetYear.toString()
+        nextYearBtn.disabled = selectedYearOffset >= 0
+        nextYearBtn.style.opacity = selectedYearOffset >= 0 ? '0.5' : '1'
+        nextYearBtn.style.cursor =
+          selectedYearOffset >= 0 ? 'not-allowed' : 'pointer'
+
+        const monthNames = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ]
+        for (let i = 0; i < 12; i++) {
+          data.push({
+            date: `${targetYear}-${i}`,
+            duration: monthTotals[i] || 0,
+            label: monthNames[i],
+          })
+        }
+      }
+
+      const nonZeroDurations = data
+        .filter((d) => d.duration > 0)
+        .map((d) => d.duration)
+      const maxDuration =
+        nonZeroDurations.length > 0 ? Math.max(...nonZeroDurations) : 1
+
+      // Clear and render bars
+      barsContainer.innerHTML = ''
+      data.forEach((item) => {
+        const barWrapper = document.createElement('div')
+        barWrapper.style.flex = '1'
+        barWrapper.style.display = 'flex'
+        barWrapper.style.flexDirection = 'column'
+        barWrapper.style.alignItems = 'center'
+        barWrapper.style.height = '100%'
+        barWrapper.style.justifyContent = 'flex-end'
+        barsContainer.appendChild(barWrapper)
+
+        const barContainer = document.createElement('div')
+        barContainer.style.width = '100%'
+        barContainer.style.display = 'flex'
+        barContainer.style.flexDirection = 'column'
+        barContainer.style.alignItems = 'center'
+        barContainer.style.justifyContent = 'flex-end'
+        barContainer.style.flex = '1'
+        barWrapper.appendChild(barContainer)
+
+        const bar = document.createElement('div')
+        const height =
+          item.duration > 0 ? (item.duration / maxDuration) * 100 : 0
+        bar.style.width = '100%'
+        bar.style.height = `${height}%`
+        bar.style.backgroundColor = '#28a745'
+        bar.style.borderRadius = '4px 4px 0 0'
+        bar.style.minHeight = item.duration > 0 ? '4px' : '0'
+        bar.style.position = 'relative'
+        bar.style.cursor = item.duration > 0 ? 'pointer' : 'default'
+        bar.style.transition = 'opacity 0.2s'
+        barContainer.appendChild(bar)
+
+        if (item.duration > 0 && view !== 'year') {
+          bar.addEventListener('mouseenter', () => {
+            bar.style.opacity = '0.7'
+          })
+          bar.addEventListener('mouseleave', () => {
+            bar.style.opacity = '1'
+          })
+          bar.addEventListener('click', () => {
+            // Parse date string properly to avoid timezone issues
+            const dateParts = item.date.split('-')
+            const targetDate = new Date(
+              parseInt(dateParts[0]),
+              parseInt(dateParts[1]) - 1,
+              parseInt(dateParts[2])
+            )
+            const now = new Date()
+            const nowLocal = new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate()
+            )
+            const dayDiff = Math.round(
+              (targetDate - nowLocal) / (1000 * 60 * 60 * 24)
+            )
+
+            if (window.onThisDayRender) {
+              window.onThisDayRender(dayDiff)
+            }
+
+            const section = document.getElementById('on-this-day-section')
+            if (section) {
+              section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+          })
+        }
+
+        // Update cursor for year view or if no data
+        if (view === 'year' || item.duration === 0) {
+          bar.style.cursor = 'default'
+        }
+
+        const durationLabel = document.createElement('div')
+        durationLabel.innerText = formatDuration(item.duration)
+        durationLabel.style.fontSize = '0.85rem'
+        durationLabel.style.fontWeight = 'bold'
+        durationLabel.style.marginBottom = '4px'
+        durationLabel.style.color = '#fff'
+        durationLabel.style.visibility =
+          item.duration === 0 ? 'hidden' : 'visible'
+        barContainer.insertBefore(durationLabel, bar)
+
+        const dayLabel = document.createElement('div')
+        dayLabel.innerText = item.label
+        dayLabel.style.fontSize = '0.85rem'
+        dayLabel.style.marginTop = '8px'
+        dayLabel.style.textAlign = 'center'
+        barWrapper.appendChild(dayLabel)
+      })
+    }
+
+    // Add button click handlers
+    weekBtn.addEventListener('click', () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      renderChart('week')
+    })
+    monthBtn.addEventListener('click', () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      renderChart('month')
+    })
+    yearBtn.addEventListener('click', () => {
+      selectedWeekOffset = 0
+      selectedMonthOffset = 0
+      selectedYearOffset = 0
+      renderChart('year')
+    })
+
+    prevWeekBtn.addEventListener('click', () => {
+      selectedWeekOffset--
+      renderChart('week')
+    })
+
+    nextWeekBtn.addEventListener('click', () => {
+      if (selectedWeekOffset < 0) {
+        selectedWeekOffset++
+        renderChart('week')
+      }
+    })
+
+    prevMonthBtn.addEventListener('click', () => {
+      selectedMonthOffset--
+      renderChart('month')
+    })
+
+    nextMonthBtn.addEventListener('click', () => {
+      if (selectedMonthOffset < 0) {
+        selectedMonthOffset++
+        renderChart('month')
+      }
+    })
+
+    prevYearBtn.addEventListener('click', async () => {
+      selectedYearOffset--
+      await renderChart('year')
+    })
+
+    nextYearBtn.addEventListener('click', async () => {
+      if (selectedYearOffset < 0) {
+        selectedYearOffset++
+        await renderChart('year')
+      }
+    })
+
+    // Initial render
+    await renderChart('week')
+  }
+
+  // on this day section
+  async function createOnThisDaySection(row) {
+    const scenes = await getScenesWithOHistory()
+
+    // Create main container
+    const mainContainer = document.createElement('div')
+    mainContainer.style.width = '100%'
+    mainContainer.style.maxWidth = '1200px'
+    mainContainer.style.margin = '0 auto'
+    mainContainer.style.padding = '2rem 1rem'
+    mainContainer.id = 'on-this-day-section'
+    row.appendChild(mainContainer)
+
+    // Track selected day offset (0 = today, -1 = yesterday, etc.)
+    let selectedDayOffset = 0
+
+    // Function to render the day
+    async function renderDay(dayOffset) {
+      selectedDayOffset = dayOffset
+      const now = new Date()
+      const targetDate = new Date(now)
+      targetDate.setDate(now.getDate() + dayOffset)
+      const targetDay = targetDate.toLocaleDateString('en-CA') // YYYY-MM-DD format
+
+      // Collect day's O's with times and associated scenes
+      const dayOs = []
+      const daySceneEvents = [] // Array of all events (plays and O's) for the day
+
+      scenes.forEach((scene) => {
+        const oTimesOnDay = []
+        const playTimesOnDay = []
+
+        // Check if scene was played on target day
+        if (scene.play_history && scene.play_history.length > 0) {
+          scene.play_history.forEach((timestamp) => {
+            const date = new Date(timestamp)
+            const day = date.toLocaleDateString('en-CA')
+            if (day === targetDay) {
+              playTimesOnDay.push(date)
+            }
+          })
+        }
+
+        // Collect O's from target day
+        if (scene.o_history && scene.o_history.length > 0) {
+          scene.o_history.forEach((timestamp) => {
+            // Skip invalid/undated O's
+            if (!timestamp) return
+
+            const date = new Date(timestamp)
+            // Validate date
+            if (isNaN(date.getTime())) return
+
+            const day = date.toLocaleDateString('en-CA')
+            if (day === targetDay) {
+              oTimesOnDay.push(date)
+              dayOs.push({
+                time: date,
+                hour: date.getHours(),
+                minute: date.getMinutes(),
+                scene: scene,
+              })
+            }
+          })
+        }
+
+        // Combine all events for this scene and sort by time
+        const allEvents = []
+        oTimesOnDay.forEach((oTime) => {
+          allEvents.push({ time: oTime, hasO: true })
+        })
+        playTimesOnDay.forEach((playTime) => {
+          allEvents.push({ time: playTime, hasO: false })
+        })
+        allEvents.sort((a, b) => a.time - b.time)
+
+        // Filter out duplicates within 30 minutes, but always keep all O events
+        const filteredEvents = []
+        allEvents.forEach((event) => {
+          // Always add O events without checking for duplicates
+          if (event.hasO) {
+            filteredEvents.push(event)
+            return
+          }
+
+          // For non-O events (watch events), check if there's any O within 30 minutes
+          const hasNearbyO = allEvents.some(
+            (otherEvent) =>
+              otherEvent.hasO &&
+              Math.abs(otherEvent.time - event.time) < 1800000 // 30 minutes in ms
+          )
+
+          // Only add watch event if there's no O nearby
+          if (!hasNearbyO) {
+            // Also check for duplicate watch events within 30 minutes
+            const similarWatchIndex = filteredEvents.findIndex(
+              (existingEvent) =>
+                !existingEvent.hasO &&
+                Math.abs(existingEvent.time - event.time) < 1800000
+            )
+
+            if (similarWatchIndex === -1) {
+              filteredEvents.push(event)
+            }
+          }
+        })
+
+        // Add filtered events to the day's event list
+        filteredEvents.forEach((event) => {
+          daySceneEvents.push({
+            scene: scene,
+            time: event.time,
+            hasO: event.hasO,
+          })
+        })
+      })
+
+      // Sort events by time
+      daySceneEvents.sort((a, b) => a.time - b.time)
+
+      // Sort O's by time
+      dayOs.sort((a, b) => a.time - b.time)
+
+      // Clear container
+      mainContainer.innerHTML = ''
+
+      // Header with title and navigation
+      const headerContainer = document.createElement('div')
+      headerContainer.style.display = 'flex'
+      headerContainer.style.justifyContent = 'space-between'
+      headerContainer.style.alignItems = 'center'
+      headerContainer.style.marginBottom = '2rem'
+      headerContainer.style.flexWrap = 'wrap'
+      headerContainer.style.gap = '1rem'
+      mainContainer.appendChild(headerContainer)
+
+      const title = document.createElement('h4')
+      title.innerText = 'ON THIS DAY'
+      title.style.fontSize = '1.5rem'
+      title.style.margin = '0'
+      title.style.flex = '1'
+      title.style.textAlign = 'center'
+      headerContainer.appendChild(title)
+
+      // Day navigation
+      const dayNavContainer = document.createElement('div')
+      dayNavContainer.style.display = 'flex'
+      dayNavContainer.style.justifyContent = 'center'
+      dayNavContainer.style.alignItems = 'center'
+      dayNavContainer.style.gap = '1rem'
+      headerContainer.appendChild(dayNavContainer)
+
+      const prevDayBtn = document.createElement('button')
+      prevDayBtn.innerText = '← Prev'
+      prevDayBtn.style.padding = '0.25rem 0.75rem'
+      prevDayBtn.style.cursor = 'pointer'
+      prevDayBtn.style.border = '1px solid #555'
+      prevDayBtn.style.backgroundColor = 'transparent'
+      prevDayBtn.style.color = '#fff'
+      prevDayBtn.style.borderRadius = '4px'
+      dayNavContainer.appendChild(prevDayBtn)
+
+      const dayLabel = document.createElement('span')
+      dayLabel.style.fontSize = '1rem'
+      dayLabel.style.fontWeight = 'bold'
+      dayLabel.style.minWidth = '120px'
+      dayLabel.style.textAlign = 'center'
+      const isToday = dayOffset === 0
+      if (isToday) {
+        dayLabel.innerText = 'Today'
+      } else {
+        dayLabel.innerText = targetDate.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      }
+      dayNavContainer.appendChild(dayLabel)
+
+      const nextDayBtn = document.createElement('button')
+      nextDayBtn.innerText = 'Next →'
+      nextDayBtn.style.padding = '0.25rem 0.75rem'
+      nextDayBtn.style.cursor = 'pointer'
+      nextDayBtn.style.border = '1px solid #555'
+      nextDayBtn.style.backgroundColor = 'transparent'
+      nextDayBtn.style.color = '#fff'
+      nextDayBtn.style.borderRadius = '4px'
+      nextDayBtn.disabled = dayOffset >= 0
+      nextDayBtn.style.opacity = dayOffset >= 0 ? '0.5' : '1'
+      nextDayBtn.style.cursor = dayOffset >= 0 ? 'not-allowed' : 'pointer'
+      dayNavContainer.appendChild(nextDayBtn)
+
+      prevDayBtn.addEventListener('click', () => {
+        renderDay(selectedDayOffset - 1)
+      })
+
+      nextDayBtn.addEventListener('click', () => {
+        if (selectedDayOffset < 0) {
+          renderDay(selectedDayOffset + 1)
+        }
+      })
+
+      // Content container (timeline + video list)
+      const contentContainer = document.createElement('div')
+      contentContainer.style.display = 'flex'
+      contentContainer.style.gap = '2rem'
+      contentContainer.style.marginBottom = '2rem'
+      contentContainer.style.flexWrap = 'wrap'
+      mainContainer.appendChild(contentContainer)
+
+      // Left side: 24-hour timeline
+      const timelineContainer = document.createElement('div')
+      timelineContainer.style.flex = '1'
+      timelineContainer.style.minWidth = '300px'
+      timelineContainer.style.maxWidth = '500px'
+      contentContainer.appendChild(timelineContainer)
+
+      const timelineTitle = document.createElement('h5')
+      timelineTitle.innerText = 'Timeline'
+      timelineTitle.style.marginBottom = '1rem'
+      timelineTitle.style.fontSize = '1.1rem'
+      timelineContainer.appendChild(timelineTitle)
+
+      // Timeline visualization
+      const timelineViz = document.createElement('div')
+      timelineViz.style.position = 'relative'
+      timelineViz.style.height = '400px'
+      timelineViz.style.border = '1px solid #555'
+      timelineViz.style.borderRadius = '8px'
+      timelineViz.style.padding = '1rem 2rem'
+      timelineViz.style.backgroundColor = 'rgba(0,0,0,0.2)'
+      timelineContainer.appendChild(timelineViz)
+
+      // Draw center vertical line
+      const centerLine = document.createElement('div')
+      centerLine.style.position = 'absolute'
+      centerLine.style.left = '50%'
+      centerLine.style.top = '1rem'
+      centerLine.style.bottom = '1rem'
+      centerLine.style.width = '2px'
+      centerLine.style.backgroundColor = '#444'
+      centerLine.style.transform = 'translateX(-50%)'
+      timelineViz.appendChild(centerLine)
+
+      // Draw hour markers (every 3 hours)
+      for (let hour = 0; hour <= 24; hour += 3) {
+        const markerContainer = document.createElement('div')
+        markerContainer.style.position = 'absolute'
+        markerContainer.style.left = '0'
+        markerContainer.style.right = '0'
+        markerContainer.style.top = `calc(${(hour / 24) * 100}% - 10px)`
+        markerContainer.style.display = 'flex'
+        markerContainer.style.alignItems = 'center'
+        markerContainer.style.justifyContent = 'center'
+        markerContainer.style.gap = '0.5rem'
+        timelineViz.appendChild(markerContainer)
+
+        // Convert to 12-hour format
+        let displayHour = hour % 12
+        displayHour = displayHour === 0 ? 12 : displayHour
+        const ampm = hour < 12 ? 'am' : 'pm'
+
+        const hourLabel = document.createElement('span')
+        hourLabel.innerText = hour === 24 ? '12am' : `${displayHour}${ampm}`
+        hourLabel.style.fontSize = '0.8rem'
+        hourLabel.style.color = '#999'
+        hourLabel.style.fontWeight =
+          hour === 0 || hour === 12 ? 'bold' : 'normal'
+        hourLabel.style.backgroundColor = 'rgba(0,0,0,0.5)'
+        hourLabel.style.padding = '2px 6px'
+        hourLabel.style.borderRadius = '3px'
+        markerContainer.appendChild(hourLabel)
+      }
+
+      // Draw AM/PM background sections
+      const amSection = document.createElement('div')
+      amSection.style.position = 'absolute'
+      amSection.style.left = '0'
+      amSection.style.right = '0'
+      amSection.style.top = '0'
+      amSection.style.height = '50%'
+      amSection.style.backgroundColor = 'rgba(255, 200, 100, 0.03)'
+      amSection.style.pointerEvents = 'none'
+      timelineViz.insertBefore(amSection, centerLine)
+
+      const pmSection = document.createElement('div')
+      pmSection.style.position = 'absolute'
+      pmSection.style.left = '0'
+      pmSection.style.right = '0'
+      pmSection.style.top = '50%'
+      pmSection.style.height = '50%'
+      pmSection.style.backgroundColor = 'rgba(100, 150, 255, 0.03)'
+      pmSection.style.pointerEvents = 'none'
+      timelineViz.insertBefore(pmSection, centerLine)
+
+      // Draw O markers with improved styling
+      dayOs.forEach((o, index) => {
+        const timePercent = (o.hour * 60 + o.minute) / (24 * 60)
+
+        // Connector line from center to marker
+        const connector = document.createElement('div')
+        connector.style.position = 'absolute'
+        connector.style.left = '50%'
+        connector.style.top = `calc(${timePercent * 100}%)`
+        connector.style.width = '30px'
+        connector.style.height = '2px'
+        connector.style.backgroundColor = '#007bff'
+        connector.style.transform =
+          index % 2 === 0
+            ? 'translateY(-50%)'
+            : 'translateY(-50%) translateX(-100%)'
+        connector.style.zIndex = '5'
+        timelineViz.appendChild(connector)
+
+        const marker = document.createElement('div')
+        marker.style.position = 'absolute'
+        marker.style.left =
+          index % 2 === 0 ? 'calc(50% + 30px)' : 'calc(50% - 50px)'
+        marker.style.top = `calc(${timePercent * 100}% - 10px)`
+        marker.style.width = '20px'
+        marker.style.height = '20px'
+        marker.style.backgroundColor = '#007bff'
+        marker.style.borderRadius = '50%'
+        marker.style.border = '3px solid #fff'
+        marker.style.cursor = 'pointer'
+        marker.style.zIndex = '10'
+        marker.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.5)'
+        marker.style.transition = 'transform 0.2s, box-shadow 0.2s'
+
+        // Format time for tooltip
+        let tooltipHour = o.hour % 12
+        tooltipHour = tooltipHour === 0 ? 12 : tooltipHour
+        const tooltipAmpm = o.hour < 12 ? 'am' : 'pm'
+        const tooltipMinute = o.minute.toString().padStart(2, '0')
+
+        marker.title = `${tooltipHour}:${tooltipMinute}${tooltipAmpm} - ${
+          o.scene.title ||
+          (o.scene.files && o.scene.files[0]?.basename) ||
+          'Untitled'
+        }`
+
+        marker.addEventListener('mouseenter', () => {
+          marker.style.transform = 'scale(1.3)'
+          marker.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.8)'
+        })
+        marker.addEventListener('mouseleave', () => {
+          marker.style.transform = 'scale(1)'
+          marker.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.5)'
+        })
+        marker.addEventListener('click', () => {
+          window.location.href = `/scenes/${o.scene.id}`
+        })
+
+        timelineViz.appendChild(marker)
+      })
+
+      // Right side: Video list
+      const videoListContainer = document.createElement('div')
+      videoListContainer.style.flex = '1'
+      videoListContainer.style.minWidth = '300px'
+      contentContainer.appendChild(videoListContainer)
+
+      const videoListTitle = document.createElement('h5')
+      videoListTitle.innerText = 'Videos Watched'
+      videoListTitle.style.marginBottom = '1rem'
+      videoListTitle.style.fontSize = '1.1rem'
+      videoListContainer.appendChild(videoListTitle)
+
+      const videoList = document.createElement('div')
+      videoList.style.maxHeight = '400px'
+      videoList.style.overflowY = 'auto'
+      videoList.style.border = '1px solid #555'
+      videoList.style.borderRadius = '8px'
+      videoList.style.backgroundColor = 'rgba(0,0,0,0.2)'
+      videoListContainer.appendChild(videoList)
+
+      // Add videos to list
+      if (daySceneEvents.length === 0) {
+        const emptyMsg = document.createElement('div')
+        emptyMsg.style.padding = '2rem'
+        emptyMsg.style.textAlign = 'center'
+        emptyMsg.style.color = '#888'
+        emptyMsg.innerText = 'No videos watched on this day'
+        videoList.appendChild(emptyMsg)
+      } else {
+        // Load watch time data
+        const watchTimeData = await loadWatchTimeData()
+        const targetDayWatchData = watchTimeData[targetDay]
+        const isToday = dayOffset === 0
+
+        // Helper to format watch time duration
+        function formatWatchDuration(seconds) {
+          const hours = Math.floor(seconds / 3600)
+          const minutes = Math.floor((seconds % 3600) / 60)
+          if (hours > 0) {
+            return `${hours}h ${minutes}m`
+          } else if (minutes > 0) {
+            return `${minutes}m`
+          } else if (seconds > 0) {
+            return `${Math.floor(seconds)}s`
+          }
+          return '0m'
+        }
+
+        daySceneEvents.forEach(({ scene, time, hasO }) => {
+          const videoItem = document.createElement('div')
+          videoItem.style.display = 'flex'
+          videoItem.style.gap = '1rem'
+          videoItem.style.padding = '0.75rem'
+          videoItem.style.borderBottom = '1px solid #333'
+          videoItem.style.alignItems = 'center'
+          videoItem.style.transition = 'background-color 0.2s'
+          videoItem.style.cursor = 'pointer'
+          videoItem.style.position = 'relative'
+          if (hasO) {
+            videoItem.style.border = '2px solid #007bff'
+            videoItem.style.borderRadius = '4px'
+            videoItem.style.marginBottom = '0.5rem'
+          }
+          videoList.appendChild(videoItem)
+
+          videoItem.addEventListener('mouseenter', () => {
+            videoItem.style.backgroundColor = 'rgba(255,255,255,0.05)'
+          })
+          videoItem.addEventListener('mouseleave', () => {
+            videoItem.style.backgroundColor = 'transparent'
+          })
+
+          videoItem.addEventListener('click', () => {
+            window.location.href = `/scenes/${scene.id}`
+          })
+
+          const thumbnail = document.createElement('img')
+          thumbnail.src = scene.paths.screenshot
+          thumbnail.style.width = '80px'
+          thumbnail.style.height = '45px'
+          thumbnail.style.objectFit = 'cover'
+          thumbnail.style.borderRadius = '4px'
+          thumbnail.style.flexShrink = '0'
+          videoItem.appendChild(thumbnail)
+
+          const infoContainer = document.createElement('div')
+          infoContainer.style.flex = '1'
+          infoContainer.style.minWidth = '0'
+          videoItem.appendChild(infoContainer)
+
+          const sceneTitle = document.createElement('div')
+          sceneTitle.innerText =
+            scene.title ||
+            (scene.files && scene.files[0]?.basename) ||
+            'Untitled'
+          sceneTitle.style.fontSize = '0.9rem'
+          sceneTitle.style.fontWeight = 'bold'
+          sceneTitle.style.marginBottom = '0.25rem'
+          sceneTitle.style.overflow = 'hidden'
+          sceneTitle.style.textOverflow = 'ellipsis'
+          sceneTitle.style.whiteSpace = 'nowrap'
+          infoContainer.appendChild(sceneTitle)
+
+          const sceneInfo = document.createElement('div')
+          sceneInfo.style.fontSize = '0.75rem'
+          sceneInfo.style.color = '#888'
+          // Format time as 12-hour with am/pm
+          let hours = time.getHours()
+          const minutes = time.getMinutes()
+          const ampm = hours >= 12 ? 'pm' : 'am'
+          hours = hours % 12
+          hours = hours ? hours : 12 // 0 should be 12
+          const timeStr = `${hours}:${minutes
+            .toString()
+            .padStart(2, '0')}${ampm}`
+
+          // Check if this scene has watch time on this day
+          let watchTimeText = timeStr
+          if (targetDayWatchData && targetDayWatchData.videos) {
+            const videoData = targetDayWatchData.videos.find(
+              (v) => String(v.id) === String(scene.id)
+            )
+            if (videoData && videoData.watchTime > 0) {
+              const formattedTime = formatWatchDuration(videoData.watchTime)
+              const dayText = isToday ? 'today' : 'on this day'
+              watchTimeText = `${timeStr} - ${formattedTime} watched ${dayText}`
+            }
+          }
+
+          sceneInfo.innerText = watchTimeText
+          infoContainer.appendChild(sceneInfo)
+
+          // Add O emoji if this event has an O
+          if (hasO) {
+            const oEmoji = document.createElement('div')
+            oEmoji.innerText = '💦'
+            oEmoji.style.fontSize = '1.5rem'
+            oEmoji.style.flexShrink = '0'
+            videoItem.appendChild(oEmoji)
+          }
+        })
+      }
+
+      // Summary section at bottom
+      const summaryContainer = document.createElement('div')
+      summaryContainer.style.display = 'flex'
+      summaryContainer.style.justifyContent = 'center'
+      summaryContainer.style.gap = '3rem'
+      summaryContainer.style.padding = '1.5rem'
+      summaryContainer.style.borderTop = '2px solid #555'
+      summaryContainer.style.marginTop = '1rem'
+      mainContainer.appendChild(summaryContainer)
+
+      // Total O's today
+      const oSummary = document.createElement('div')
+      oSummary.style.textAlign = 'center'
+      summaryContainer.appendChild(oSummary)
+
+      const oCount = document.createElement('div')
+      oCount.innerText = dayOs.length
+      oCount.style.fontSize = '2rem'
+      oCount.style.fontWeight = 'bold'
+      oCount.style.color = '#007bff'
+      oSummary.appendChild(oCount)
+
+      const oLabel = document.createElement('div')
+      oLabel.innerText = isToday ? "Total O's Today" : "Total O's This Day"
+      oLabel.style.fontSize = '0.9rem'
+      oLabel.style.color = '#888'
+      oLabel.style.marginTop = '0.25rem'
+      oSummary.appendChild(oLabel)
+
+      // Total watch time for the day
+      const watchTimeData = await loadWatchTimeData()
+      const dayData = watchTimeData[targetDay]
+      // Simplified format: just numbers (with migration from old format)
+      let watchTimeSeconds = 0
+      if (dayData) {
+        if (typeof dayData === 'object' && 'totalTime' in dayData) {
+          // Migrate old format
+          watchTimeSeconds = dayData.totalTime || 0
+        } else {
+          watchTimeSeconds = dayData || 0
+        }
+      }
+
+      const watchTimeSummary = document.createElement('div')
+      watchTimeSummary.style.textAlign = 'center'
+      summaryContainer.appendChild(watchTimeSummary)
+
+      const watchTimeDisplay = document.createElement('div')
+      // Format duration for display
+      const hours = Math.floor(watchTimeSeconds / 3600)
+      const minutes = Math.floor((watchTimeSeconds % 3600) / 60)
+      let watchTimeText = ''
+      if (hours > 0) {
+        watchTimeText = `${hours}h ${minutes}m`
+      } else if (minutes > 0) {
+        watchTimeText = `${minutes}m`
+      } else if (watchTimeSeconds > 0) {
+        watchTimeText = `${Math.floor(watchTimeSeconds)}s`
+      } else {
+        watchTimeText = '0m'
+      }
+      watchTimeDisplay.innerText = watchTimeText
+      watchTimeDisplay.style.fontSize = '2rem'
+      watchTimeDisplay.style.fontWeight = 'bold'
+      watchTimeDisplay.style.color = '#28a745'
+      watchTimeSummary.appendChild(watchTimeDisplay)
+
+      const watchTimeLabel = document.createElement('div')
+      watchTimeLabel.innerText = isToday
+        ? 'Watch Time Today'
+        : 'Watch Time This Day'
+      watchTimeLabel.style.fontSize = '0.9rem'
+      watchTimeLabel.style.color = '#888'
+      watchTimeLabel.style.marginTop = '0.25rem'
+      watchTimeSummary.appendChild(watchTimeLabel)
+    }
+
+    // Initial render with today
+    renderDay(0)
+
+    // Store the render function globally so graphs can trigger it
+    window.onThisDayRender = renderDay
+  }
+
+  csLib.PathElementListener(
+    '/stats',
+    'div.container-fluid div.mt-5',
+    setupStats
+  )
+  async function setupStats(el) {
+    if (document.querySelector('.custom-stats-row')) return
+    const changelog = el.querySelector('div.changelog')
+
+    // Create header for O stats
+    const oStatsHeader = document.createElement('h3')
+    oStatsHeader.style.marginTop = '2rem'
+    oStatsHeader.style.marginBottom = '2rem'
+    oStatsHeader.style.textAlign = 'center'
+    oStatsHeader.style.fontSize = '3rem'
+    oStatsHeader.innerText = 'O Stats (Video)'
+    el.insertBefore(oStatsHeader, changelog)
+
+    const rowOne = document.createElement('div')
+    rowOne.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowOne.style.justifyContent = 'center'
+    el.insertBefore(rowOne, changelog)
+    const rowTwo = document.createElement('div')
+    rowTwo.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowTwo.style.justifyContent = 'center'
+    rowTwo.style.gap = '1rem'
+    rowTwo.style.paddingTop = '2rem'
+    el.insertBefore(rowTwo, changelog)
+    const rowThree = document.createElement('div')
+    rowThree.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowThree.style.justifyContent = 'center'
+    rowThree.style.paddingTop = '4rem'
+    el.insertBefore(rowThree, changelog)
+    const rowFour = document.createElement('div')
+    rowFour.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowFour.style.justifyContent = 'center'
+    rowFour.style.paddingTop = '4rem'
+    el.insertBefore(rowFour, changelog)
+    const rowFive = document.createElement('div')
+    rowFive.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowFive.style.justifyContent = 'center'
+    rowFive.style.paddingTop = '2rem'
+    el.insertBefore(rowFive, changelog)
+    const rowSix = document.createElement('div')
+    rowSix.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
+    rowSix.style.justifyContent = 'center'
+    rowSix.style.paddingTop = '4rem'
+    rowSix.style.paddingBottom = '12rem'
+    el.insertBefore(rowSix, changelog)
+
+    await createOrgasmsToday(rowOne)
+    await createBestOrgasmDay(rowOne)
+    await createOrgasmStreak(rowOne)
+    await createWatchTimeToday(rowOne)
+    await createMostOScene(rowTwo)
+    await createLongestWatchedScene(rowTwo)
+    // await createMostOImage(rowTwo)
+    await createMostRecentOScene(rowTwo)
+    await createOldestOScene(rowTwo)
+    await createWeeklyBarChart(rowThree)
+    await createWatchTimeBarChart(rowFour)
+    await createWatchTimeExportButton(rowFive)
+    await createOnThisDaySection(rowSix)
+  }
+})()
