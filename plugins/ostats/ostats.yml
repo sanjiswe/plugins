@@ -1,13 +1,12 @@
 name: O Stats
 # requires: CommunityScriptsUILibrary
-description: Adds O stats to the stats page
+description: Adds O stats to the stats page [REQUIRES CommunityScriptsUILibrary]
 version: 1.0
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   requires:
     - CommunityScriptsUILibrary
   javascript:
-    - cs-ui-lib.js
     - ostats.js
   assets:
     /: .
