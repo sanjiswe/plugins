@@ -1,10 +1,10 @@
 name: O Stats
 description: Adds O stats to the stats page
 version: 1.0
-url: https://github.com/sanjiswe/stash_ostats
+url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   requires:
-    - CommunityScriptsUILibrary
+    - https://github.com/stashapp/CommunityScripts/tree/main/plugins/CommunityScriptsUILibrary
   javascript:
     - ostats.js
   assets:
