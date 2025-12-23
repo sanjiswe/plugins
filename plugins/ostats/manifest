@@ -2,13 +2,14 @@ id: ostats
 name: O Stats
 metadata:
   description: Adds O stats to the stats page
-version: 1.0-e6dcf78
-date: '2025-12-23 10:43:00'
+version: 1.0-dd4b23b
+date: '2025-12-23 10:56:01'
 requires: []
 source_repository: https://sanjiswe.github.io/plugins/main/index.yml
 files:
   - ostats.js
   - save_watch_data.py
   - load_watch_data.py
-  - manifest
   - ostats.yml
+  - ostats_watch_history.json
+  - manifest
