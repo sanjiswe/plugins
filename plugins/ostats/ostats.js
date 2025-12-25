@@ -490,9 +490,40 @@
 
   // Also listen for visibility changes (tab switching, minimizing)
   document.addEventListener('visibilitychange', async () => {
+    // If the page becomes hidden, stop tracking to avoid counting background time
     if (document.hidden && trackingIntervalId) {
       console.log('[OStats] Page hidden, stopping tracking')
       await stopWatchTimeTracking()
+      return
+    }
+
+    // If the page becomes visible again, attempt to resume tracking
+    if (!document.hidden) {
+      try {
+        // Only resume if we're on a scene page and a video is present and playing
+        if (isOnScenePage()) {
+          const video = document.querySelector('video')
+          if (video) {
+            // If video appears to be playing (not paused) resume tracking
+            if (!video.paused) {
+              console.log(
+                '[OStats] Page visible and video playing, resuming tracking'
+              )
+              startWatchTimeTracking()
+            } else {
+              // Video is paused; do not start tracking until playback resumes.
+              console.log(
+                '[OStats] Page visible but video is paused; will resume on play event'
+              )
+            }
+          } else {
+            // No video element yet; start tracking when video starts playing (observer/setup already does this)
+            console.log('[OStats] Page visible but no video element found')
+          }
+        }
+      } catch (err) {
+        console.error('[OStats] Error while handling visibilitychange:', err)
+      }
     }
   })
 
