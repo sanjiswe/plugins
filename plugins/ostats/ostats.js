@@ -271,7 +271,28 @@
 
     trackingIntervalId = setInterval(() => {
       const now = Date.now()
-      const totalElapsed = Math.floor((now - trackingStartTime) / 1000)
+
+      // Normalize trackingStartTime units (defend against accidental seconds vs ms)
+      let startMs = trackingStartTime || 0
+      if (startMs > 0 && startMs < 1e11) {
+        // Likely stored as seconds; convert to ms
+        console.warn(
+          '[OStats] Normalizing trackingStartTime from seconds to ms'
+        )
+        startMs = startMs * 1000
+      }
+
+      let totalElapsed = startMs > 0 ? Math.floor((now - startMs) / 1000) : 0
+      // Clamp implausible elapsed times (avoid counting epoch seconds when startMs is invalid)
+      if (totalElapsed < 0) totalElapsed = 0
+      if (totalElapsed > 86400) {
+        console.warn(
+          '[OStats] Clamping implausible totalElapsed:',
+          totalElapsed
+        )
+        totalElapsed = 86400
+      }
+
       const sinceSave = (now - lastSaveTime) / 1000
 
       // Save every 5 seconds
@@ -305,7 +326,25 @@
       const now = Date.now()
       // Safety check: only calculate if trackingStartTime is valid
       if (trackingStartTime > 0) {
-        const totalElapsed = Math.floor((now - trackingStartTime) / 1000)
+        // Normalize trackingStartTime units (seconds vs ms defense)
+        let startMs = trackingStartTime
+        if (startMs > 0 && startMs < 1e11) {
+          console.warn(
+            '[OStats] Normalizing trackingStartTime from seconds to ms'
+          )
+          startMs = startMs * 1000
+        }
+
+        let totalElapsed = Math.floor((now - startMs) / 1000)
+        if (totalElapsed < 0) totalElapsed = 0
+        if (totalElapsed > 86400) {
+          console.warn(
+            '[OStats] Clamping implausible totalElapsed on stop:',
+            totalElapsed
+          )
+          totalElapsed = 86400
+        }
+
         const remainingTime = totalElapsed - currentSessionTime
 
         if (remainingTime > 0) {
