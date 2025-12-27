@@ -1039,9 +1039,18 @@
     })
 
     const maxCount = Math.max(0, ...Object.values(dayTotals))
-    const bestDay = Object.keys(dayTotals).find(
-      (day) => dayTotals[day] === maxCount
-    )
+    // If multiple days tie for maxCount, choose the oldest (earliest) date.
+    let bestDay = null
+    if (maxCount > 0) {
+      const daysWithMax = Object.keys(dayTotals).filter(
+        (day) => dayTotals[day] === maxCount
+      )
+      if (daysWithMax.length > 0) {
+        // Dates are in YYYY-MM-DD so lexical sort gives chronological order
+        daysWithMax.sort()
+        bestDay = daysWithMax[0]
+      }
+    }
 
     let heading = maxCount.toString()
     let title = 'Record Day'
