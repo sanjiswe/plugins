@@ -38,7 +38,7 @@
 
     // Method 1: Try h2 in the scene page
     const h2Element = document.querySelector(
-      '.scene-header h2, h2.scene-header__title, h2'
+      '.scene-header h2, h2.scene-header__title, h2',
     )
     if (h2Element) {
       title = h2Element.textContent.trim()
@@ -84,7 +84,7 @@
       console.log(
         '[OStats] Response status:',
         response.status,
-        response.statusText
+        response.statusText,
       )
 
       if (response.ok) {
@@ -101,7 +101,7 @@
           // If cached data has more watch time for today, keep it (it's fresher)
           if (cachedTodayTime > loadedTodayTime) {
             console.warn(
-              `[OStats] Loaded data appears stale (${loadedTodayTime}s < ${cachedTodayTime}s cached). Keeping cached data.`
+              `[OStats] Loaded data appears stale (${loadedTodayTime}s < ${cachedTodayTime}s cached). Keeping cached data.`,
             )
             watchDataLoaded = true
             return watchDataCache
@@ -112,14 +112,14 @@
         watchDataLoaded = true
         console.log(
           '[OStats] Loaded watch history from JSON file, total days:',
-          Object.keys(watchData).length
+          Object.keys(watchData).length,
         )
         return watchDataCache
       } else if (response.status === 404) {
         // Only cache empty data on 404 if we don't have existing cache
         if (watchDataCache && Object.keys(watchDataCache).length > 0) {
           console.warn(
-            '[OStats] File not found but have cached data, keeping cache'
+            '[OStats] File not found but have cached data, keeping cache',
           )
           watchDataLoaded = true
           return watchDataCache
@@ -148,7 +148,7 @@
     // Only reach here if load failed AND no cache exists
     // This is dangerous - don't cache this empty state
     console.error(
-      '[OStats] Failed to load watch history and no cache available - using empty data (NOT cached)'
+      '[OStats] Failed to load watch history and no cache available - using empty data (NOT cached)',
     )
     return {}
   }
@@ -168,7 +168,7 @@
       Object.keys(watchDataCache).length > 0
     ) {
       console.error(
-        '[OStats] Refusing to save empty data - cached data exists!'
+        '[OStats] Refusing to save empty data - cached data exists!',
       )
       return
     }
@@ -197,7 +197,7 @@
             console.error('[OStats] GraphQL Error:', err)
             console.error(
               '[OStats] Error details:',
-              JSON.stringify(err, null, 2)
+              JSON.stringify(err, null, 2),
             )
             throw err
           })
@@ -230,7 +230,7 @@
     // Safety check: if data is empty and we don't have cache loaded, something went wrong
     if (Object.keys(data).length === 0 && !watchDataLoaded) {
       console.error(
-        '[OStats] Cannot add watch time - data load failed and no cache available. Skipping to prevent data loss.'
+        '[OStats] Cannot add watch time - data load failed and no cache available. Skipping to prevent data loss.',
       )
       return
     }
@@ -277,7 +277,7 @@
       if (startMs > 0 && startMs < 1e11) {
         // Likely stored as seconds; convert to ms
         console.warn(
-          '[OStats] Normalizing trackingStartTime from seconds to ms'
+          '[OStats] Normalizing trackingStartTime from seconds to ms',
         )
         startMs = startMs * 1000
       }
@@ -288,7 +288,7 @@
       if (totalElapsed > 86400) {
         console.warn(
           '[OStats] Clamping implausible totalElapsed:',
-          totalElapsed
+          totalElapsed,
         )
         totalElapsed = 86400
       }
@@ -304,7 +304,7 @@
             ? ` (${currentSceneInfo.title})`
             : ''
           console.log(
-            `[OStats] Saved ${timeToSave}s watch time for ${getTodayDate()}${sceneLog}`
+            `[OStats] Saved ${timeToSave}s watch time for ${getTodayDate()}${sceneLog}`,
           )
           currentSessionTime = totalElapsed
         }
@@ -330,7 +330,7 @@
         let startMs = trackingStartTime
         if (startMs > 0 && startMs < 1e11) {
           console.warn(
-            '[OStats] Normalizing trackingStartTime from seconds to ms'
+            '[OStats] Normalizing trackingStartTime from seconds to ms',
           )
           startMs = startMs * 1000
         }
@@ -340,7 +340,7 @@
         if (totalElapsed > 86400) {
           console.warn(
             '[OStats] Clamping implausible totalElapsed on stop:',
-            totalElapsed
+            totalElapsed,
           )
           totalElapsed = 86400
         }
@@ -353,7 +353,7 @@
             ? ` (${currentSceneInfo.title})`
             : ''
           console.log(
-            `[OStats] Final save: ${remainingTime}s watch time for ${getTodayDate()}${sceneLog}`
+            `[OStats] Final save: ${remainingTime}s watch time for ${getTodayDate()}${sceneLog}`,
           )
         }
       }
@@ -363,7 +363,7 @@
       // Wait for any pending saves to complete before clearing scene info
       if (pendingSavePromise) {
         console.log(
-          '[OStats] Waiting for pending save to complete before stopping'
+          '[OStats] Waiting for pending save to complete before stopping',
         )
         await pendingSavePromise
       }
@@ -445,7 +445,7 @@
       existingVideo.addEventListener('playing', startWatchTimeTracking)
       existingVideo.addEventListener(
         'pause',
-        async () => await stopWatchTimeTracking()
+        async () => await stopWatchTimeTracking(),
       )
       existingVideo.addEventListener('ended', async () => {
         console.log('[OStats] Video ended (existing)')
@@ -456,11 +456,11 @@
       })
       existingVideo.addEventListener(
         'waiting',
-        async () => await stopWatchTimeTracking()
+        async () => await stopWatchTimeTracking(),
       )
       existingVideo.addEventListener(
         'stalled',
-        async () => await stopWatchTimeTracking()
+        async () => await stopWatchTimeTracking(),
       )
 
       // Check if video is already playing
@@ -516,7 +516,7 @@
                 task_name: 'saveWatchData',
                 args_map: { watch_data: JSON.stringify(data) },
               },
-            })
+            }),
           )
         } catch (err) {
           console.error('[OStats] Failed to send beacon:', err)
@@ -546,13 +546,13 @@
             // If video appears to be playing (not paused) resume tracking
             if (!video.paused) {
               console.log(
-                '[OStats] Page visible and video playing, resuming tracking'
+                '[OStats] Page visible and video playing, resuming tracking',
               )
               startWatchTimeTracking()
             } else {
               // Video is paused; do not start tracking until playback resumes.
               console.log(
-                '[OStats] Page visible but video is paused; will resume on play event'
+                '[OStats] Page visible but video is paused; will resume on play event',
               )
             }
           } else {
@@ -568,7 +568,7 @@
 
   // ===== END WATCH TIME TRACKING =====
 
-  function createStatElement(container, title, heading) {
+  function createStatElement(container, title, heading, tooltip) {
     const statEl = document.createElement('div')
     statEl.classList.add('stats-element')
     container.appendChild(statEl)
@@ -582,6 +582,12 @@
     statHeading.classList.add('heading')
     statHeading.innerText = heading
     statEl.appendChild(statHeading)
+
+    // Add tooltip if provided
+    if (tooltip) {
+      statEl.title = tooltip
+      statEl.style.cursor = 'help'
+    }
   }
 
   function createImageStatElement(container, scene, title, heading) {
@@ -953,7 +959,7 @@
             dataToImport = importData.data
             console.log(
               '[OStats] Importing data from wrapped format, total days:',
-              Object.keys(dataToImport).length
+              Object.keys(dataToImport).length,
             )
           } else if (
             importData.version === undefined &&
@@ -963,7 +969,7 @@
             dataToImport = importData
             console.log(
               '[OStats] Importing data from direct format, total days:',
-              Object.keys(dataToImport).length
+              Object.keys(dataToImport).length,
             )
           } else {
             throw new Error('Invalid file format')
@@ -971,7 +977,7 @@
 
           console.log(
             '[OStats] Importing data sample:',
-            JSON.stringify(dataToImport).substring(0, 200)
+            JSON.stringify(dataToImport).substring(0, 200),
           )
 
           // Delete all local data and replace with imported data
@@ -988,11 +994,11 @@
           const verifyData = await loadWatchTimeData()
           console.log(
             '[OStats] Verification after import, total days:',
-            Object.keys(verifyData).length
+            Object.keys(verifyData).length,
           )
           console.log(
             '[OStats] Verify data sample:',
-            JSON.stringify(verifyData).substring(0, 200)
+            JSON.stringify(verifyData).substring(0, 200),
           )
 
           importBtn.innerText = '✓ Imported!'
@@ -1043,7 +1049,7 @@
     let bestDay = null
     if (maxCount > 0) {
       const daysWithMax = Object.keys(dayTotals).filter(
-        (day) => dayTotals[day] === maxCount
+        (day) => dayTotals[day] === maxCount,
       )
       if (daysWithMax.length > 0) {
         // Dates are in YYYY-MM-DD so lexical sort gives chronological order
@@ -1108,6 +1114,31 @@
       }
     }
 
+    // Calculate highest streak ever
+    let highestStreak = 0
+    let currentStreak = 0
+    const allSortedDays = Array.from(daySet).sort()
+
+    for (let i = 0; i < allSortedDays.length; i++) {
+      if (i === 0) {
+        currentStreak = 1
+      } else {
+        const prevDate = new Date(allSortedDays[i - 1])
+        const currDate = new Date(allSortedDays[i])
+        const dayDiff = Math.round(
+          (currDate - prevDate) / (1000 * 60 * 60 * 24),
+        )
+
+        if (dayDiff === 1) {
+          currentStreak++
+        } else {
+          highestStreak = Math.max(highestStreak, currentStreak)
+          currentStreak = 1
+        }
+      }
+    }
+    highestStreak = Math.max(highestStreak, currentStreak)
+
     // Show tombstone if there's a streak but no O today (streak will be lost)
     let displayStreak
     if (streak > 0 && !hasOToday) {
@@ -1115,7 +1146,10 @@
     } else {
       displayStreak = streak > 1 ? `${streak} 🔥` : streak
     }
-    createStatElement(row, displayStreak, 'O Streak (days)')
+
+    const tooltip =
+      highestStreak > 0 ? `Highest Streak: ${highestStreak} days` : null
+    createStatElement(row, displayStreak, 'O Streak', tooltip)
   }
 
   // longest watched day
@@ -1243,7 +1277,7 @@
         row,
         maxImage,
         maxCount,
-        "Image with Most O's"
+        "Image with Most O's",
       )
     }
   }
@@ -1604,17 +1638,17 @@
         const targetDate = new Date(
           now.getFullYear(),
           now.getMonth() + selectedMonthOffset,
-          1
+          1,
         )
         const firstDay = new Date(
           targetDate.getFullYear(),
           targetDate.getMonth(),
-          1
+          1,
         )
         const lastDay = new Date(
           targetDate.getFullYear(),
           targetDate.getMonth() + 1,
-          0
+          0,
         )
         const daysInMonth = lastDay.getDate()
 
@@ -1632,7 +1666,7 @@
           const date = new Date(
             targetDate.getFullYear(),
             targetDate.getMonth(),
-            i
+            i,
           )
           const dayStr = date.toLocaleDateString('en-CA')
           data.push({
@@ -1732,16 +1766,16 @@
             const targetDate = new Date(
               parseInt(dateParts[0]),
               parseInt(dateParts[1]) - 1,
-              parseInt(dateParts[2])
+              parseInt(dateParts[2]),
             )
             const now = new Date()
             const nowLocal = new Date(
               now.getFullYear(),
               now.getMonth(),
-              now.getDate()
+              now.getDate(),
             )
             const dayDiff = Math.round(
-              (targetDate - nowLocal) / (1000 * 60 * 60 * 24)
+              (targetDate - nowLocal) / (1000 * 60 * 60 * 24),
             )
 
             if (window.onThisDayRender) {
@@ -2112,12 +2146,12 @@
         const targetDate = new Date(
           now.getFullYear(),
           now.getMonth() + selectedMonthOffset,
-          1
+          1,
         )
         const daysInMonth = new Date(
           targetDate.getFullYear(),
           targetDate.getMonth() + 1,
-          0
+          0,
         ).getDate()
 
         // Update month label
@@ -2134,7 +2168,7 @@
           const date = new Date(
             targetDate.getFullYear(),
             targetDate.getMonth(),
-            i
+            i,
           )
           const dayStr = date.toLocaleDateString('en-CA')
           data.push({
@@ -2238,16 +2272,16 @@
             const targetDate = new Date(
               parseInt(dateParts[0]),
               parseInt(dateParts[1]) - 1,
-              parseInt(dateParts[2])
+              parseInt(dateParts[2]),
             )
             const now = new Date()
             const nowLocal = new Date(
               now.getFullYear(),
               now.getMonth(),
-              now.getDate()
+              now.getDate(),
             )
             const dayDiff = Math.round(
-              (targetDate - nowLocal) / (1000 * 60 * 60 * 24)
+              (targetDate - nowLocal) / (1000 * 60 * 60 * 24),
             )
 
             if (window.onThisDayRender) {
@@ -2360,6 +2394,8 @@
 
     // Track selected day offset (0 = today, -1 = yesterday, etc.)
     let selectedDayOffset = 0
+    // Track expanded state
+    let isExpanded = false
 
     // Function to render the day
     async function renderDay(dayOffset) {
@@ -2434,7 +2470,7 @@
           const hasNearbyO = allEvents.some(
             (otherEvent) =>
               otherEvent.hasO &&
-              Math.abs(otherEvent.time - event.time) < 1800000 // 30 minutes in ms
+              Math.abs(otherEvent.time - event.time) < 1800000, // 30 minutes in ms
           )
 
           // Only add watch event if there's no O nearby
@@ -2443,7 +2479,7 @@
             const similarWatchIndex = filteredEvents.findIndex(
               (existingEvent) =>
                 !existingEvent.hasO &&
-                Math.abs(existingEvent.time - event.time) < 1800000
+                Math.abs(existingEvent.time - event.time) < 1800000,
             )
 
             if (similarWatchIndex === -1) {
@@ -2713,8 +2749,25 @@
       videoListTitle.style.fontSize = '1.1rem'
       videoListContainer.appendChild(videoListTitle)
 
+      // Add expand button
+      const expandButton = document.createElement('button')
+      expandButton.innerText = isExpanded ? 'Collapse ▲' : 'Expand ▼'
+      expandButton.style.padding = '0.5rem 1rem'
+      expandButton.style.marginLeft = '1rem'
+      expandButton.style.cursor = 'pointer'
+      expandButton.style.border = '1px solid #555'
+      expandButton.style.backgroundColor = 'transparent'
+      expandButton.style.color = '#fff'
+      expandButton.style.borderRadius = '4px'
+      expandButton.style.fontSize = '0.9rem'
+      expandButton.addEventListener('click', () => {
+        isExpanded = !isExpanded
+        renderDay(selectedDayOffset)
+      })
+      videoListTitle.appendChild(expandButton)
+
       const videoList = document.createElement('div')
-      videoList.style.maxHeight = '400px'
+      videoList.style.maxHeight = isExpanded ? '800px' : '400px'
       videoList.style.overflowY = 'auto'
       videoList.style.border = '1px solid #555'
       videoList.style.borderRadius = '8px'
@@ -2821,7 +2874,7 @@
           let watchTimeText = timeStr
           if (targetDayWatchData && targetDayWatchData.videos) {
             const videoData = targetDayWatchData.videos.find(
-              (v) => String(v.id) === String(scene.id)
+              (v) => String(v.id) === String(scene.id),
             )
             if (videoData && videoData.watchTime > 0) {
               const formattedTime = formatWatchDuration(videoData.watchTime)
@@ -2867,7 +2920,7 @@
       oSummary.appendChild(oCount)
 
       const oLabel = document.createElement('div')
-      oLabel.innerText = isToday ? "Total O's Today" : "Total O's This Day"
+      oLabel.innerText = isToday ? "Total O's" : "Total O's"
       oLabel.style.fontSize = '0.9rem'
       oLabel.style.color = '#888'
       oLabel.style.marginTop = '0.25rem'
@@ -2912,13 +2965,32 @@
       watchTimeSummary.appendChild(watchTimeDisplay)
 
       const watchTimeLabel = document.createElement('div')
-      watchTimeLabel.innerText = isToday
-        ? 'Watch Time Today'
-        : 'Watch Time This Day'
+      watchTimeLabel.innerText = isToday ? 'Watch Time' : 'Watch Time'
       watchTimeLabel.style.fontSize = '0.9rem'
       watchTimeLabel.style.color = '#888'
       watchTimeLabel.style.marginTop = '0.25rem'
       watchTimeSummary.appendChild(watchTimeLabel)
+
+      // Videos watched stat
+      const videosWatchedSummary = document.createElement('div')
+      videosWatchedSummary.style.textAlign = 'center'
+      summaryContainer.appendChild(videosWatchedSummary)
+
+      const videosWatchedCount = document.createElement('div')
+      videosWatchedCount.innerText = daySceneEvents.length
+      videosWatchedCount.style.fontSize = '2rem'
+      videosWatchedCount.style.fontWeight = 'bold'
+      videosWatchedCount.style.color = '#ffc107'
+      videosWatchedSummary.appendChild(videosWatchedCount)
+
+      const videosWatchedLabel = document.createElement('div')
+      videosWatchedLabel.innerText = isToday
+        ? 'Videos Watched'
+        : 'Videos Watched'
+      videosWatchedLabel.style.fontSize = '0.9rem'
+      videosWatchedLabel.style.color = '#888'
+      videosWatchedLabel.style.marginTop = '0.25rem'
+      videosWatchedSummary.appendChild(videosWatchedLabel)
     }
 
     // Initial render with today
@@ -2931,7 +3003,7 @@
   csLib.PathElementListener(
     '/stats',
     'div.container-fluid div.mt-5',
-    setupStats
+    setupStats,
   )
   async function setupStats(el) {
     if (document.querySelector('.custom-stats-row')) return
@@ -2943,7 +3015,7 @@
     oStatsHeader.style.marginBottom = '2rem'
     oStatsHeader.style.textAlign = 'center'
     oStatsHeader.style.fontSize = '3rem'
-    oStatsHeader.innerText = 'O Stats (Video)'
+    oStatsHeader.innerText = 'O Stats'
     el.insertBefore(oStatsHeader, changelog)
 
     const rowOne = document.createElement('div')
