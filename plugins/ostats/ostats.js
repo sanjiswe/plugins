@@ -1149,7 +1149,69 @@
 
     const tooltip =
       highestStreak > 0 ? `Highest Streak: ${highestStreak} days` : null
-    createStatElement(row, displayStreak, 'O Streak', tooltip)
+    createStatElement(row, displayStreak, 'Streak', tooltip)
+  }
+
+  // average O per minute of watch time (overall)
+  async function createAverageOPerMinute(row) {
+    const scenes = await getScenesWithOHistory()
+
+    // Get total watch time in seconds and find first day with watch time
+    const watchTimeData = await loadWatchTimeData()
+    let totalWatchTimeSeconds = 0
+    let firstWatchDay = null
+
+    const watchDays = Object.keys(watchTimeData).sort()
+    if (watchDays.length > 0) {
+      firstWatchDay = watchDays[0]
+    }
+
+    Object.values(watchTimeData).forEach((dayData) => {
+      if (typeof dayData === 'object' && 'totalTime' in dayData) {
+        totalWatchTimeSeconds += dayData.totalTime || 0
+      } else {
+        totalWatchTimeSeconds += dayData || 0
+      }
+    })
+
+    // Count total O's only from first watch day onward
+    let totalOs = 0
+    scenes.forEach((scene) => {
+      if (scene.o_history && scene.o_history.length > 0) {
+        scene.o_history.forEach((timestamp) => {
+          if (!timestamp) return
+          const date = new Date(timestamp)
+          if (isNaN(date.getTime())) return
+
+          // Only count O's on or after the first watch day
+          const oDay = date.toLocaleDateString('en-CA')
+          if (!firstWatchDay || oDay >= firstWatchDay) {
+            totalOs++
+          }
+        })
+      }
+    })
+
+    // Convert to minutes
+    const totalWatchTimeMinutes = totalWatchTimeSeconds / 60
+
+    // Calculate average minutes per O
+    let avgMinPerO = 0
+    if (totalOs > 0) {
+      avgMinPerO = totalWatchTimeMinutes / totalOs
+    }
+
+    // Format the display
+    let displayText = '0'
+    if (avgMinPerO > 0) {
+      if (avgMinPerO >= 10) {
+        displayText = avgMinPerO.toFixed(1)
+      } else {
+        displayText = avgMinPerO.toFixed(2)
+      }
+    }
+
+    createStatElement(row, `${displayText} ⏱️`, 'Avg min/O')
   }
 
   // longest watched day
@@ -2722,13 +2784,47 @@
           'Untitled'
         }`
 
+        // Create thumbnail preview element
+        const thumbnailPreview = document.createElement('div')
+        thumbnailPreview.style.position = 'absolute'
+        thumbnailPreview.style.top = `calc(${timePercent * 100}% - 50px)`
+        thumbnailPreview.style.width = '120px'
+        thumbnailPreview.style.height = '67.5px'
+        thumbnailPreview.style.display = 'none'
+        thumbnailPreview.style.zIndex = '100'
+        thumbnailPreview.style.pointerEvents = 'none'
+        thumbnailPreview.style.border = '2px solid #007bff'
+        thumbnailPreview.style.borderRadius = '4px'
+        thumbnailPreview.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.5)'
+        thumbnailPreview.style.overflow = 'hidden'
+
+        // Position on same side as marker
+        if (index % 2 === 0) {
+          // Right side
+          thumbnailPreview.style.left = 'calc(50% + 60px)'
+        } else {
+          // Left side
+          thumbnailPreview.style.left = 'calc(50% - 180px)'
+        }
+
+        const thumbnailImg = document.createElement('img')
+        thumbnailImg.src = o.scene.paths.screenshot
+        thumbnailImg.style.width = '100%'
+        thumbnailImg.style.height = '100%'
+        thumbnailImg.style.objectFit = 'cover'
+        thumbnailPreview.appendChild(thumbnailImg)
+
+        timelineViz.appendChild(thumbnailPreview)
+
         marker.addEventListener('mouseenter', () => {
           marker.style.transform = 'scale(1.3)'
           marker.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.8)'
+          thumbnailPreview.style.display = 'block'
         })
         marker.addEventListener('mouseleave', () => {
           marker.style.transform = 'scale(1)'
           marker.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.5)'
+          thumbnailPreview.style.display = 'none'
         })
         marker.addEventListener('click', () => {
           window.location.href = `/scenes/${o.scene.id}`
@@ -2977,7 +3073,11 @@
       summaryContainer.appendChild(videosWatchedSummary)
 
       const videosWatchedCount = document.createElement('div')
-      videosWatchedCount.innerText = daySceneEvents.length
+      // Count unique scenes only
+      const uniqueScenes = new Set(
+        daySceneEvents.map((event) => event.scene.id),
+      )
+      videosWatchedCount.innerText = uniqueScenes.size
       videosWatchedCount.style.fontSize = '2rem'
       videosWatchedCount.style.fontWeight = 'bold'
       videosWatchedCount.style.color = '#ffc107'
@@ -2991,6 +3091,42 @@
       videosWatchedLabel.style.color = '#888'
       videosWatchedLabel.style.marginTop = '0.25rem'
       videosWatchedSummary.appendChild(videosWatchedLabel)
+
+      // Average minutes per O for this day
+      const avgMinPerOSummary = document.createElement('div')
+      avgMinPerOSummary.style.textAlign = 'center'
+      summaryContainer.appendChild(avgMinPerOSummary)
+
+      const avgMinPerODisplay = document.createElement('div')
+      // Calculate average minutes per O for this specific day
+      const totalOsThisDay = dayOs.length
+      const watchTimeMinutes = watchTimeSeconds / 60
+      let avgMinPerO = 0
+      if (totalOsThisDay > 0) {
+        avgMinPerO = watchTimeMinutes / totalOsThisDay
+      }
+
+      let avgDisplayText = '0'
+      if (avgMinPerO > 0) {
+        if (avgMinPerO >= 10) {
+          avgDisplayText = avgMinPerO.toFixed(1)
+        } else {
+          avgDisplayText = avgMinPerO.toFixed(2)
+        }
+      }
+
+      avgMinPerODisplay.innerText = avgDisplayText
+      avgMinPerODisplay.style.fontSize = '2rem'
+      avgMinPerODisplay.style.fontWeight = 'bold'
+      avgMinPerODisplay.style.color = '#dc3545'
+      avgMinPerOSummary.appendChild(avgMinPerODisplay)
+
+      const avgMinPerOLabel = document.createElement('div')
+      avgMinPerOLabel.innerText = 'Avg min/O'
+      avgMinPerOLabel.style.fontSize = '0.9rem'
+      avgMinPerOLabel.style.color = '#888'
+      avgMinPerOLabel.style.marginTop = '0.25rem'
+      avgMinPerOSummary.appendChild(avgMinPerOLabel)
     }
 
     // Initial render with today
@@ -3054,6 +3190,7 @@
     await createBestOrgasmDay(rowOne)
     await createOrgasmStreak(rowOne)
     await createWatchTimeToday(rowOne)
+    await createAverageOPerMinute(rowOne)
     await createMostOScene(rowTwo)
     await createLongestWatchedScene(rowTwo)
     // await createMostOImage(rowTwo)
