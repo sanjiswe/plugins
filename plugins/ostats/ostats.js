@@ -224,6 +224,11 @@
 
   // Add watch time for today (simplified - just total time)
   async function addWatchTime(seconds, sceneInfo) {
+    // CRITICAL: Reload data from disk immediately before updating to avoid race conditions
+    // with multiple tabs. Each tab needs the latest data from other tabs.
+    watchDataLoaded = false // Force reload from disk
+    watchDataCache = null
+    
     const data = await loadWatchTimeData()
     const today = getTodayDate()
 
