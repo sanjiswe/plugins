@@ -1222,7 +1222,12 @@
       }
     }
 
-    createStatElement(row, `${displayText} ⏱️`, 'Avg min/O')
+    createStatElement(
+      row,
+      `${displayText} ⏱️`,
+      'Mean Jerk Time',
+      'Average minutes to orgasm ratio',
+    )
   }
 
   // longest watched day
@@ -3046,41 +3051,47 @@
       videosWatchedLabel.style.marginTop = '0.25rem'
       videosWatchedSummary.appendChild(videosWatchedLabel)
 
-      // Average minutes per O for this day
-      const avgMinPerOSummary = document.createElement('div')
-      avgMinPerOSummary.style.textAlign = 'center'
-      summaryContainer.appendChild(avgMinPerOSummary)
+      // Average minutes per O for this day (Mean Jerk Time)
+      // Only show if there are O's this day
+      if (dayOs.length > 0) {
+        const avgMinPerOSummary = document.createElement('div')
+        avgMinPerOSummary.style.textAlign = 'center'
+        summaryContainer.appendChild(avgMinPerOSummary)
 
-      const avgMinPerODisplay = document.createElement('div')
-      // Calculate average minutes per O for this specific day
-      const totalOsThisDay = dayOs.length
-      const watchTimeMinutes = watchTimeSeconds / 60
-      let avgMinPerO = 0
-      if (totalOsThisDay > 0) {
-        avgMinPerO = watchTimeMinutes / totalOsThisDay
-      }
-
-      let avgDisplayText = '0'
-      if (avgMinPerO > 0) {
-        if (avgMinPerO >= 10) {
-          avgDisplayText = avgMinPerO.toFixed(1)
-        } else {
-          avgDisplayText = avgMinPerO.toFixed(2)
+        const avgMinPerODisplay = document.createElement('div')
+        // Calculate average minutes per O for this specific day
+        const totalOsThisDay = dayOs.length
+        const watchTimeMinutes = watchTimeSeconds / 60
+        let avgMinPerO = 0
+        if (totalOsThisDay > 0) {
+          avgMinPerO = watchTimeMinutes / totalOsThisDay
         }
+
+        // Format as hours and minutes like other time displays
+        let avgDisplayText = '0m'
+        if (avgMinPerO > 0) {
+          const avgHours = Math.floor(avgMinPerO / 60)
+          const avgMins = Math.floor(avgMinPerO % 60)
+          if (avgHours > 0) {
+            avgDisplayText = `${avgHours}h ${avgMins}m`
+          } else {
+            avgDisplayText = `${avgMins}m`
+          }
+        }
+
+        avgMinPerODisplay.innerText = avgDisplayText
+        avgMinPerODisplay.style.fontSize = '2rem'
+        avgMinPerODisplay.style.fontWeight = 'bold'
+        avgMinPerODisplay.style.color = '#dc3545'
+        avgMinPerOSummary.appendChild(avgMinPerODisplay)
+
+        const avgMinPerOLabel = document.createElement('div')
+        avgMinPerOLabel.innerText = 'MJT'
+        avgMinPerOLabel.style.fontSize = '0.9rem'
+        avgMinPerOLabel.style.color = '#888'
+        avgMinPerOLabel.style.marginTop = '0.25rem'
+        avgMinPerOSummary.appendChild(avgMinPerOLabel)
       }
-
-      avgMinPerODisplay.innerText = avgDisplayText
-      avgMinPerODisplay.style.fontSize = '2rem'
-      avgMinPerODisplay.style.fontWeight = 'bold'
-      avgMinPerODisplay.style.color = '#dc3545'
-      avgMinPerOSummary.appendChild(avgMinPerODisplay)
-
-      const avgMinPerOLabel = document.createElement('div')
-      avgMinPerOLabel.innerText = 'Avg min/O'
-      avgMinPerOLabel.style.fontSize = '0.9rem'
-      avgMinPerOLabel.style.color = '#888'
-      avgMinPerOLabel.style.marginTop = '0.25rem'
-      avgMinPerOSummary.appendChild(avgMinPerOLabel)
     }
 
     // Initial render with today
