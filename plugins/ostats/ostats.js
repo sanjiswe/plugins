@@ -730,15 +730,10 @@
       .then((data) => data.findImages?.images || [])
   }
 
-  // orgasms today
-  async function createOrgasmsToday(row) {
-    const scenes = await getScenesWithOHistory()
-
-    // Get today in local timezone
-    const now = new Date()
-    const today = now.toLocaleDateString('en-CA') // YYYY-MM-DD format
-
-    let todayCount = 0
+  // OPTIMIZATION: Pre-process O history into a day map to avoid repeated iteration
+  function buildOHistoryDayMap(scenes) {
+    const dayMap = new Map()
+    const dayTotals = {}
 
     scenes.forEach((scene) => {
       if (scene.o_history && scene.o_history.length > 0) {
@@ -746,27 +741,41 @@
           // Skip invalid/undated O's
           if (!timestamp) return
 
-          // Convert UTC timestamp to local timezone
           const date = new Date(timestamp)
           // Validate date
           if (isNaN(date.getTime())) return
 
-          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+          const day = date.toLocaleDateString('en-CA')
 
-          if (day === today) {
-            todayCount++
+          // Add to day map (for detailed queries)
+          if (!dayMap.has(day)) {
+            dayMap.set(day, [])
           }
+          dayMap.get(day).push({ scene, timestamp })
+
+          // Increment totals (for quick counts)
+          dayTotals[day] = (dayTotals[day] || 0) + 1
         })
       }
     })
+
+    return { dayMap, dayTotals }
+  }
+
+  // orgasms today
+  async function createOrgasmsToday(row, scenes, oHistoryCache) {
+    // Get today in local timezone
+    const now = new Date()
+    const today = now.toLocaleDateString('en-CA') // YYYY-MM-DD format
+
+    // Use pre-processed cache for instant lookup
+    const todayCount = oHistoryCache.dayTotals[today] || 0
 
     createStatElement(row, `${todayCount} 💦`, "O's Today")
   }
 
   // record session - day with longest watch time
-  async function createWatchTimeToday(row) {
-    const watchTimeData = await loadWatchTimeData()
-
+  async function createWatchTimeToday(row, watchTimeData) {
     let maxDuration = 0
     let maxDay = null
 
@@ -1023,26 +1032,9 @@
   }
 
   // day with most orgasms
-  async function createBestOrgasmDay(row) {
-    const scenes = await getScenesWithOHistory()
-    const dayTotals = {}
-
-    scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        scene.o_history.forEach((timestamp) => {
-          // Skip invalid/undated O's
-          if (!timestamp) return
-
-          // Convert UTC timestamp to local timezone
-          const date = new Date(timestamp)
-          // Validate date
-          if (isNaN(date.getTime())) return
-
-          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
-          dayTotals[day] = (dayTotals[day] || 0) + 1
-        })
-      }
-    })
+  async function createBestOrgasmDay(row, scenes, oHistoryCache) {
+    // Use pre-processed totals
+    const dayTotals = oHistoryCache.dayTotals
 
     const maxCount = Math.max(0, ...Object.values(dayTotals))
     // If multiple days tie for maxCount, choose the oldest (earliest) date.
@@ -1070,26 +1062,9 @@
   }
 
   // consecutive days streak
-  async function createOrgasmStreak(row) {
-    const scenes = await getScenesWithOHistory()
-    const daySet = new Set()
-
-    scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        scene.o_history.forEach((timestamp) => {
-          // Skip invalid/undated O's
-          if (!timestamp) return
-
-          // Convert UTC timestamp to local timezone
-          const date = new Date(timestamp)
-          // Validate date
-          if (isNaN(date.getTime())) return
-
-          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
-          daySet.add(day)
-        })
-      }
-    })
+  async function createOrgasmStreak(row, scenes, oHistoryCache) {
+    // Use pre-processed day set
+    const daySet = new Set(Object.keys(oHistoryCache.dayTotals))
 
     const sortedDays = Array.from(daySet).sort().reverse()
     let streak = 0
@@ -1153,11 +1128,13 @@
   }
 
   // average O per minute of watch time (overall)
-  async function createAverageOPerMinute(row) {
-    const scenes = await getScenesWithOHistory()
-
+  async function createAverageOPerMinute(
+    row,
+    scenes,
+    watchTimeData,
+    oHistoryCache,
+  ) {
     // Get total watch time in seconds and find first day with watch time
-    const watchTimeData = await loadWatchTimeData()
     let totalWatchTimeSeconds = 0
     let firstWatchDay = null
 
@@ -1174,23 +1151,20 @@
       }
     })
 
-    // Count total O's only from first watch day onward
+    // Count total O's only from first watch day onward using cache
     let totalOs = 0
-    scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        scene.o_history.forEach((timestamp) => {
-          if (!timestamp) return
-          const date = new Date(timestamp)
-          if (isNaN(date.getTime())) return
-
-          // Only count O's on or after the first watch day
-          const oDay = date.toLocaleDateString('en-CA')
-          if (!firstWatchDay || oDay >= firstWatchDay) {
-            totalOs++
-          }
-        })
-      }
-    })
+    if (firstWatchDay) {
+      Object.keys(oHistoryCache.dayTotals).forEach((day) => {
+        if (day >= firstWatchDay) {
+          totalOs += oHistoryCache.dayTotals[day]
+        }
+      })
+    } else {
+      // If no watch history, count all O's
+      Object.values(oHistoryCache.dayTotals).forEach((count) => {
+        totalOs += count
+      })
+    }
 
     // Convert to minutes
     const totalWatchTimeMinutes = totalWatchTimeSeconds / 60
@@ -1268,8 +1242,7 @@
   }
 
   // scene with most orgasms
-  async function createMostOScene(row) {
-    const scenes = await getScenesWithOHistory()
+  async function createMostOScene(row, scenes) {
     let maxScene = null
     let maxCount = 0
 
@@ -1345,8 +1318,7 @@
   }
 
   // most recent O scene
-  async function createMostRecentOScene(row) {
-    const scenes = await getScenesWithOHistory()
+  async function createMostRecentOScene(row, scenes) {
     let recentScene = null
     let recentTimestamp = null
 
@@ -1377,8 +1349,7 @@
   }
 
   // oldest O scene
-  async function createOldestOScene(row) {
-    const scenes = await getScenesWithOHistory()
+  async function createOldestOScene(row, scenes) {
     let oldestScene = null
     let oldestRecentTimestamp = null
 
@@ -1433,9 +1404,7 @@
   }
 
   // weekly bar chart
-  async function createWeeklyBarChart(row) {
-    const scenes = await getScenesWithOHistory()
-
+  async function createWeeklyBarChart(row, scenes, oHistoryCache) {
     // Create chart container
     const chartContainer = document.createElement('div')
     chartContainer.style.width = '100%'
@@ -1635,23 +1604,8 @@
       monthNavContainer.style.display = view === 'month' ? 'flex' : 'none'
       yearNavContainer.style.display = view === 'year' ? 'flex' : 'none'
 
-      // Get O counts for each day
-      const dayTotals = {}
-      scenes.forEach((scene) => {
-        if (scene.o_history && scene.o_history.length > 0) {
-          scene.o_history.forEach((timestamp) => {
-            // Skip invalid/undated O's
-            if (!timestamp) return
-
-            const date = new Date(timestamp)
-            // Validate date
-            if (isNaN(date.getTime())) return
-
-            const day = date.toLocaleDateString('en-CA')
-            dayTotals[day] = (dayTotals[day] || 0) + 1
-          })
-        }
-      })
+      // Use pre-processed day totals
+      const dayTotals = oHistoryCache.dayTotals
 
       const now = new Date()
       let data = []
@@ -1935,7 +1889,7 @@
   }
 
   // Watch Time Bar Chart
-  async function createWatchTimeBarChart(row) {
+  async function createWatchTimeBarChart(row, watchTimeData) {
     // Create chart container
     const chartContainer = document.createElement('div')
     chartContainer.style.width = '100%'
@@ -2148,7 +2102,6 @@
       yearNavContainer.style.display = view === 'year' ? 'flex' : 'none'
 
       // Get watch time data from our tracking system
-      const watchTimeData = await loadWatchTimeData()
       // Convert to day totals, handling migration from old format
       const dayTotals = {}
       Object.keys(watchTimeData).forEach((day) => {
@@ -2442,9 +2395,7 @@
   }
 
   // on this day section
-  async function createOnThisDaySection(row) {
-    const scenes = await getScenesWithOHistory()
-
+  async function createOnThisDaySection(row, scenes, oHistoryCache) {
     // Create main container
     const mainContainer = document.createElement('div')
     mainContainer.style.width = '100%'
@@ -2467,97 +2418,63 @@
       targetDate.setDate(now.getDate() + dayOffset)
       const targetDay = targetDate.toLocaleDateString('en-CA') // YYYY-MM-DD format
 
-      // Collect day's O's with times and associated scenes
-      const dayOs = []
-      const daySceneEvents = [] // Array of all events (plays and O's) for the day
+      // Get day's O's from cache
+      const cachedOEvents = oHistoryCache.dayMap.get(targetDay) || []
 
+      // Collect day's O's with times for timeline display
+      const dayOs = cachedOEvents.map((event) => ({
+        time: new Date(event.timestamp),
+        hour: new Date(event.timestamp).getHours(),
+        minute: new Date(event.timestamp).getMinutes(),
+        scene: event.scene,
+      }))
+
+      // Collect all events (O's and plays) for this day
+      const daySceneEvents = []
+
+      // Add O events from cache
+      cachedOEvents.forEach((event) => {
+        daySceneEvents.push({
+          scene: event.scene,
+          time: new Date(event.timestamp),
+          hasO: true,
+        })
+      })
+
+      // Collect play times for this day
       scenes.forEach((scene) => {
-        const oTimesOnDay = []
-        const playTimesOnDay = []
-
-        // Check if scene was played on target day
         if (scene.play_history && scene.play_history.length > 0) {
           scene.play_history.forEach((timestamp) => {
             const date = new Date(timestamp)
             const day = date.toLocaleDateString('en-CA')
             if (day === targetDay) {
-              playTimesOnDay.push(date)
+              // Check if there's any O within 30 minutes
+              const hasNearbyO = daySceneEvents.some(
+                (oEvent) =>
+                  oEvent.hasO && Math.abs(oEvent.time - date) < 1800000, // 30 minutes in ms
+              )
+
+              // Only add watch event if there's no O nearby
+              if (!hasNearbyO) {
+                // Also check for duplicate watch events within 30 minutes
+                const hasDuplicateWatch = daySceneEvents.some(
+                  (existingEvent) =>
+                    !existingEvent.hasO &&
+                    existingEvent.scene.id === scene.id &&
+                    Math.abs(existingEvent.time - date) < 1800000,
+                )
+
+                if (!hasDuplicateWatch) {
+                  daySceneEvents.push({
+                    scene: scene,
+                    time: date,
+                    hasO: false,
+                  })
+                }
+              }
             }
           })
         }
-
-        // Collect O's from target day
-        if (scene.o_history && scene.o_history.length > 0) {
-          scene.o_history.forEach((timestamp) => {
-            // Skip invalid/undated O's
-            if (!timestamp) return
-
-            const date = new Date(timestamp)
-            // Validate date
-            if (isNaN(date.getTime())) return
-
-            const day = date.toLocaleDateString('en-CA')
-            if (day === targetDay) {
-              oTimesOnDay.push(date)
-              dayOs.push({
-                time: date,
-                hour: date.getHours(),
-                minute: date.getMinutes(),
-                scene: scene,
-              })
-            }
-          })
-        }
-
-        // Combine all events for this scene and sort by time
-        const allEvents = []
-        oTimesOnDay.forEach((oTime) => {
-          allEvents.push({ time: oTime, hasO: true })
-        })
-        playTimesOnDay.forEach((playTime) => {
-          allEvents.push({ time: playTime, hasO: false })
-        })
-        allEvents.sort((a, b) => a.time - b.time)
-
-        // Filter out duplicates within 30 minutes, but always keep all O events
-        const filteredEvents = []
-        allEvents.forEach((event) => {
-          // Always add O events without checking for duplicates
-          if (event.hasO) {
-            filteredEvents.push(event)
-            return
-          }
-
-          // For non-O events (watch events), check if there's any O within 30 minutes
-          const hasNearbyO = allEvents.some(
-            (otherEvent) =>
-              otherEvent.hasO &&
-              Math.abs(otherEvent.time - event.time) < 1800000, // 30 minutes in ms
-          )
-
-          // Only add watch event if there's no O nearby
-          if (!hasNearbyO) {
-            // Also check for duplicate watch events within 30 minutes
-            const similarWatchIndex = filteredEvents.findIndex(
-              (existingEvent) =>
-                !existingEvent.hasO &&
-                Math.abs(existingEvent.time - event.time) < 1800000,
-            )
-
-            if (similarWatchIndex === -1) {
-              filteredEvents.push(event)
-            }
-          }
-        })
-
-        // Add filtered events to the day's event list
-        filteredEvents.forEach((event) => {
-          daySceneEvents.push({
-            scene: scene,
-            time: event.time,
-            hasO: event.hasO,
-          })
-        })
       })
 
       // Sort events by time
@@ -3186,19 +3103,34 @@
     rowSix.style.paddingBottom = '12rem'
     el.insertBefore(rowSix, changelog)
 
-    await createOrgasmsToday(rowOne)
-    await createBestOrgasmDay(rowOne)
-    await createOrgasmStreak(rowOne)
-    await createWatchTimeToday(rowOne)
-    await createAverageOPerMinute(rowOne)
-    await createMostOScene(rowTwo)
-    await createLongestWatchedScene(rowTwo)
-    // await createMostOImage(rowTwo)
-    await createMostRecentOScene(rowTwo)
-    await createOldestOScene(rowTwo)
-    await createWeeklyBarChart(rowThree)
-    await createWatchTimeBarChart(rowFour)
-    await createWatchTimeExportButton(rowFive)
-    await createOnThisDaySection(rowSix)
+    // OPTIMIZATION: Load all data once upfront
+    const [scenes, watchTimeData] = await Promise.all([
+      getScenesWithOHistory(),
+      loadWatchTimeData(),
+    ])
+
+    // OPTIMIZATION: Pre-process O history for faster lookups
+    const oHistoryCache = buildOHistoryDayMap(scenes)
+
+    // OPTIMIZATION: Run all stat calculations in parallel
+    await Promise.all([
+      createOrgasmsToday(rowOne, scenes, oHistoryCache),
+      createBestOrgasmDay(rowOne, scenes, oHistoryCache),
+      createOrgasmStreak(rowOne, scenes, oHistoryCache),
+      createWatchTimeToday(rowOne, watchTimeData),
+      createAverageOPerMinute(rowOne, scenes, watchTimeData, oHistoryCache),
+    ])
+
+    await Promise.all([
+      createMostOScene(rowTwo, scenes),
+      createLongestWatchedScene(rowTwo, scenes),
+      createMostRecentOScene(rowTwo, scenes),
+      createOldestOScene(rowTwo, scenes),
+    ])
+
+    await createWeeklyBarChart(rowThree, scenes, oHistoryCache)
+    await createWatchTimeBarChart(rowFour, watchTimeData)
+    createWatchTimeExportButton(rowFive)
+    await createOnThisDaySection(rowSix, scenes, oHistoryCache)
   }
 })()
