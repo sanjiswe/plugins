@@ -228,7 +228,7 @@
     // with multiple tabs. Each tab needs the latest data from other tabs.
     watchDataLoaded = false // Force reload from disk
     watchDataCache = null
-    
+
     const data = await loadWatchTimeData()
     const today = getTodayDate()
 
@@ -1094,14 +1094,18 @@
       }
     }
 
-    // Calculate highest streak ever
+    // Calculate highest streak ever and track dates
     let highestStreak = 0
     let currentStreak = 0
+    let highestStreakStart = null
+    let highestStreakEnd = null
+    let currentStreakStart = null
     const allSortedDays = Array.from(daySet).sort()
 
     for (let i = 0; i < allSortedDays.length; i++) {
       if (i === 0) {
         currentStreak = 1
+        currentStreakStart = allSortedDays[i]
       } else {
         const prevDate = new Date(allSortedDays[i - 1])
         const currDate = new Date(allSortedDays[i])
@@ -1112,12 +1116,22 @@
         if (dayDiff === 1) {
           currentStreak++
         } else {
-          highestStreak = Math.max(highestStreak, currentStreak)
+          if (currentStreak > highestStreak) {
+            highestStreak = currentStreak
+            highestStreakStart = currentStreakStart
+            highestStreakEnd = allSortedDays[i - 1]
+          }
           currentStreak = 1
+          currentStreakStart = allSortedDays[i]
         }
       }
     }
-    highestStreak = Math.max(highestStreak, currentStreak)
+    // Check final streak
+    if (currentStreak > highestStreak) {
+      highestStreak = currentStreak
+      highestStreakStart = currentStreakStart
+      highestStreakEnd = allSortedDays[allSortedDays.length - 1]
+    }
 
     // Show tombstone if there's a streak but no O today (streak will be lost)
     let displayStreak
@@ -1127,8 +1141,15 @@
       displayStreak = streak > 1 ? `${streak} 🔥` : streak
     }
 
-    const tooltip =
-      highestStreak > 0 ? `Highest Streak: ${highestStreak} days` : null
+    // Format tooltip with dates
+    let tooltip = null
+    if (highestStreak > 0 && highestStreakStart && highestStreakEnd) {
+      const formatDate = (dateStr) => {
+        const [year, month, day] = dateStr.split('-')
+        return `${month}/${day}/${year}`
+      }
+      tooltip = `Highest Streak: ${highestStreak} days\n${formatDate(highestStreakStart)}\nto\n${formatDate(highestStreakEnd)}`
+    }
     createStatElement(row, displayStreak, 'Streak', tooltip)
   }
 
@@ -1180,13 +1201,24 @@
       avgMinPerO = totalWatchTimeMinutes / totalOs
     }
 
-    // Format the display
-    let displayText = '0'
+    // Format the display with time unit
+    let displayText = '0s'
     if (avgMinPerO > 0) {
-      if (avgMinPerO >= 10) {
-        displayText = avgMinPerO.toFixed(1)
+      if (avgMinPerO >= 60) {
+        // Show hours
+        const hours = avgMinPerO / 60
+        displayText = hours.toFixed(1) + 'h'
+      } else if (avgMinPerO >= 1) {
+        // Show minutes
+        if (avgMinPerO >= 10) {
+          displayText = avgMinPerO.toFixed(1) + 'm'
+        } else {
+          displayText = avgMinPerO.toFixed(2) + 'm'
+        }
       } else {
-        displayText = avgMinPerO.toFixed(2)
+        // Show seconds
+        const seconds = avgMinPerO * 60
+        displayText = seconds.toFixed(0) + 's'
       }
     }
 
@@ -3067,13 +3099,21 @@
     if (document.querySelector('.custom-stats-row')) return
     const changelog = el.querySelector('div.changelog')
 
+    // Create visual separator before O Stats
+    const separator = document.createElement('hr')
+    separator.style.margin = '4rem auto'
+    separator.style.width = '80%'
+    separator.style.border = 'none'
+    separator.style.borderTop = '2px solid rgba(255, 255, 255, 0.2)'
+    el.insertBefore(separator, changelog)
+
     // Create header for O stats
     const oStatsHeader = document.createElement('h3')
     oStatsHeader.style.marginTop = '2rem'
     oStatsHeader.style.marginBottom = '2rem'
     oStatsHeader.style.textAlign = 'center'
     oStatsHeader.style.fontSize = '3rem'
-    oStatsHeader.innerText = 'O Stats'
+    // oStatsHeader.innerText = 'O Stats'
     el.insertBefore(oStatsHeader, changelog)
 
     const rowOne = document.createElement('div')
@@ -3084,7 +3124,7 @@
     rowTwo.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
     rowTwo.style.justifyContent = 'center'
     rowTwo.style.gap = '1rem'
-    rowTwo.style.paddingTop = '2rem'
+    rowTwo.style.paddingTop = '3rem'
     el.insertBefore(rowTwo, changelog)
     const rowThree = document.createElement('div')
     rowThree.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
