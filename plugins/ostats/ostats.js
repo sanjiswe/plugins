@@ -22,7 +22,7 @@
   // Get today's date in YYYY-MM-DD format
   function getTodayDate() {
     const now = new Date()
-    return now.toLocaleDateString('en-CA') // YYYY-MM-DD format
+    return getLocalDateString(now) // YYYY-MM-DD format
   }
 
   // Extract scene info from current page
@@ -735,6 +735,14 @@
       .then((data) => data.findImages?.images || [])
   }
 
+  // Helper function to get consistent YYYY-MM-DD date string in local timezone
+  function getLocalDateString(date) {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
   // OPTIMIZATION: Pre-process O history into a day map to avoid repeated iteration
   function buildOHistoryDayMap(scenes) {
     const dayMap = new Map()
@@ -750,7 +758,7 @@
           // Validate date
           if (isNaN(date.getTime())) return
 
-          const day = date.toLocaleDateString('en-CA')
+          const day = getLocalDateString(date)
 
           // Add to day map (for detailed queries)
           if (!dayMap.has(day)) {
@@ -771,7 +779,7 @@
   async function createOrgasmsToday(row, scenes, oHistoryCache) {
     // Get today in local timezone
     const now = new Date()
-    const today = now.toLocaleDateString('en-CA') // YYYY-MM-DD format
+    const today = getLocalDateString(now) // YYYY-MM-DD format
 
     // Use pre-processed cache for instant lookup
     const todayCount = oHistoryCache.dayTotals[today] || 0
@@ -1075,7 +1083,7 @@
     let streak = 0
     // Get today in local timezone
     const now = new Date()
-    const todayStr = now.toLocaleDateString('en-CA')
+    const todayStr = getLocalDateString(now)
     const hasOToday = daySet.has(todayStr)
 
     // If no O today, start checking from yesterday
@@ -1085,7 +1093,7 @@
       // Calculate expected date string
       const expectedDate = new Date(now)
       expectedDate.setDate(now.getDate() - (i + startOffset))
-      const expectedDateStr = expectedDate.toLocaleDateString('en-CA')
+      const expectedDateStr = getLocalDateString(expectedDate)
 
       if (sortedDays[i] === expectedDateStr) {
         streak++
@@ -1241,7 +1249,7 @@
         scene.play_history.forEach((timestamp) => {
           // Convert UTC timestamp to local timezone
           const date = new Date(timestamp)
-          const day = date.toLocaleDateString('en-CA') // YYYY-MM-DD format
+          const day = getLocalDateString(date) // YYYY-MM-DD format
 
           if (scene.play_duration && scene.play_duration > 0) {
             const durationPerPlay =
@@ -1682,7 +1690,7 @@
         for (let i = 0; i < 7; i++) {
           const date = new Date(monday)
           date.setDate(monday.getDate() + i)
-          const dayStr = date.toLocaleDateString('en-CA')
+          const dayStr = getLocalDateString(date)
           const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
           const dayNum = date.getDate()
           data.push({
@@ -1726,7 +1734,7 @@
             targetDate.getMonth(),
             i,
           )
-          const dayStr = date.toLocaleDateString('en-CA')
+          const dayStr = getLocalDateString(date)
           data.push({
             date: dayStr,
             count: dayTotals[dayStr] || 0,
@@ -2189,7 +2197,7 @@
         for (let i = 0; i < 7; i++) {
           const date = new Date(monday)
           date.setDate(monday.getDate() + i)
-          const dayStr = date.toLocaleDateString('en-CA')
+          const dayStr = getLocalDateString(date)
           const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
           const dayNum = date.getDate()
           data.push({
@@ -2227,7 +2235,7 @@
             targetDate.getMonth(),
             i,
           )
-          const dayStr = date.toLocaleDateString('en-CA')
+          const dayStr = getLocalDateString(date)
           data.push({
             date: dayStr,
             duration: dayTotals[dayStr] || 0,
@@ -2458,7 +2466,7 @@
       const now = new Date()
       const targetDate = new Date(now)
       targetDate.setDate(now.getDate() + dayOffset)
-      const targetDay = targetDate.toLocaleDateString('en-CA') // YYYY-MM-DD format
+      const targetDay = getLocalDateString(targetDate) // YYYY-MM-DD format
 
       // Get day's O's from cache
       const cachedOEvents = oHistoryCache.dayMap.get(targetDay) || []
@@ -2488,15 +2496,17 @@
         if (scene.play_history && scene.play_history.length > 0) {
           scene.play_history.forEach((timestamp) => {
             const date = new Date(timestamp)
-            const day = date.toLocaleDateString('en-CA')
+            const day = getLocalDateString(date)
             if (day === targetDay) {
-              // Check if there's any O within 30 minutes
+              // Check if there's an O for THIS SPECIFIC SCENE within 30 minutes
               const hasNearbyO = daySceneEvents.some(
                 (oEvent) =>
-                  oEvent.hasO && Math.abs(oEvent.time - date) < 1800000, // 30 minutes in ms
+                  oEvent.hasO &&
+                  oEvent.scene.id === scene.id &&
+                  Math.abs(oEvent.time - date) < 1800000, // 30 minutes in ms
               )
 
-              // Only add watch event if there's no O nearby
+              // Only add watch event if there's no O nearby for this scene
               if (!hasNearbyO) {
                 // Also check for duplicate watch events within 30 minutes
                 const hasDuplicateWatch = daySceneEvents.some(
