@@ -101,12 +101,61 @@
   let lastSaveTimestamp = 0 // Track when we last saved to detect stale data
   let isSaving = false // Prevent concurrent saves
   let pendingSavePromise = null // Track in-flight save operations
+  let saveDebounceTimer = null // Debounce timer for save operations
+  let lastQueuedJobId = null // Track the most recent queued job ID
 
   let trackingIntervalId = null
   let currentSessionTime = 0
   let lastSaveTime = 0
   let trackingStartTime = 0 // Track when playback started
   let currentSceneInfo = null // Track current scene being watched
+
+  // Cross-tab communication via localStorage
+  const STORAGE_KEY = 'ostats_watch_data_sync'
+  const STORAGE_LOCK_KEY = 'ostats_save_lock'
+
+  // Broadcast updated data to other tabs
+  function broadcastUpdate(data) {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          data: data,
+          timestamp: Date.now(),
+          tab: Math.random(), // Identify this tab
+        }),
+      )
+    } catch (e) {
+      console.warn('[OStats] Failed to broadcast update:', e)
+    }
+  }
+
+  // Listen for updates from other tabs
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEY && e.newValue) {
+      try {
+        const update = JSON.parse(e.newValue)
+        const today = getTodayDate()
+
+        // Only update cache if the broadcast has newer data for today
+        if (update.data && update.data[today]) {
+          if (
+            !watchDataCache ||
+            (watchDataCache[today] || 0) < update.data[today]
+          ) {
+            console.log(
+              '[OStats] Received update from another tab, syncing cache',
+            )
+            watchDataCache = update.data
+            watchDataLoaded = true
+            lastSaveTimestamp = update.timestamp
+          }
+        }
+      } catch (e) {
+        console.warn('[OStats] Failed to parse storage update:', e)
+      }
+    }
+  })
 
   // Get today's date in YYYY-MM-DD format
   function getTodayDate() {
@@ -244,12 +293,6 @@
 
   // Save watch time data to JSON file via Python task
   async function saveWatchTimeData(data) {
-    // If a save is in progress, wait for it to complete first
-    if (isSaving && pendingSavePromise) {
-      console.log('[OStats] Waiting for previous save to complete')
-      await pendingSavePromise
-    }
-
     // Safety check: don't save empty data if we have cached data
     if (
       Object.keys(data).length === 0 &&
@@ -262,17 +305,85 @@
       return
     }
 
-    isSaving = true
-    pendingSavePromise = (async () => {
+    // Clear any existing debounce timer
+    if (saveDebounceTimer) {
+      clearTimeout(saveDebounceTimer)
+    }
+
+    // Debounce: only actually save after 2 seconds of no new save requests
+    saveDebounceTimer = setTimeout(async () => {
+      saveDebounceTimer = null
+
+      // Check if another tab already has a save queued with the same or newer data
+      try {
+        const lockInfo = localStorage.getItem(STORAGE_LOCK_KEY)
+        if (lockInfo) {
+          const lock = JSON.parse(lockInfo)
+          const today = getTodayDate()
+          // If another tab queued a save within last 5 seconds with same/better data, skip
+          if (
+            Date.now() - lock.timestamp < 5000 &&
+            lock.data[today] >= data[today]
+          ) {
+            console.log(
+              '[OStats] Another tab already queued save with current data, skipping',
+            )
+            return
+          }
+        }
+      } catch (e) {
+        console.warn('[OStats] Failed to check save lock:', e)
+      }
+
+      // Set lock to indicate we're saving
+      try {
+        localStorage.setItem(
+          STORAGE_LOCK_KEY,
+          JSON.stringify({
+            timestamp: Date.now(),
+            data: data,
+          }),
+        )
+      } catch (e) {
+        console.warn('[OStats] Failed to set save lock:', e)
+      }
+
+      // If we previously queued a task, try to cancel it
+      if (lastQueuedJobId) {
+        console.log(
+          '[OStats] Attempting to cancel previous save task:',
+          lastQueuedJobId,
+        )
+        try {
+          await callGQL({
+            query: `mutation StopJob($job_id: ID!) {
+              stopJob(job_id: $job_id)
+            }`,
+            variables: {
+              job_id: lastQueuedJobId,
+            },
+          })
+          console.log('[OStats] Canceled old save task')
+        } catch (e) {
+          // Task might have already started/completed, that's fine
+          console.log(
+            '[OStats] Could not cancel task (might be running):',
+            e.message,
+          )
+        }
+        lastQueuedJobId = null
+      }
+
+      isSaving = true
       try {
         const today = getTodayDate()
         const todaysTotal = data[today] || 0
-        console.log('[OStats] Saving data, todays total:', todaysTotal)
+        console.log('[OStats] Queueing save task, todays total:', todaysTotal)
 
         const result = await callGQL({
           query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
-          runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
-        }`,
+            runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
+          }`,
           variables: {
             plugin_id: 'ostats',
             task_name: 'saveWatchData',
@@ -280,41 +391,66 @@
               watch_data: JSON.stringify(data),
             },
           },
-        }).catch((err) => {
-          console.error('[OStats] GraphQL Error:', err)
-          console.error('[OStats] Error details:', JSON.stringify(err, null, 2))
-          throw err
         })
 
-        // Update cache after successful save
+        // Store the job ID if available (runPluginTask returns the job ID)
+        if (result.runPluginTask) {
+          lastQueuedJobId = result.runPluginTask
+          console.log('[OStats] Save task queued with ID:', lastQueuedJobId)
+        }
+
+        // Update cache after queuing task
         watchDataCache = data
         watchDataLoaded = true
         lastSaveTimestamp = Date.now()
 
-        console.log('[OStats] Watch history saved to JSON file')
-      } catch (e) {
-        console.error('[OStats] Error saving watch time data:', e)
-        throw e
-      }
-    })()
+        // Broadcast to other tabs that save was queued
+        broadcastUpdate(data)
 
-    try {
-      await pendingSavePromise
-    } finally {
-      isSaving = false
-      pendingSavePromise = null
-    }
+        console.log('[OStats] Watch history save task queued')
+      } catch (e) {
+        console.error('[OStats] Error queueing save task:', e)
+      } finally {
+        isSaving = false
+      }
+    }, 2000) // 2 second debounce
   }
 
   // Add watch time for today (simplified - just total time)
   async function addWatchTime(seconds, sceneInfo) {
-    // CRITICAL: Reload data from disk immediately before updating to avoid race conditions
-    // with multiple tabs. Each tab needs the latest data from other tabs.
-    watchDataLoaded = false // Force reload from disk
-    watchDataCache = null
+    const today = getTodayDate()
+
+    // Check for updates from other tabs via localStorage
+    try {
+      const storedUpdate = localStorage.getItem(STORAGE_KEY)
+      if (storedUpdate) {
+        const update = JSON.parse(storedUpdate)
+        // Merge with other tabs' data - use the maximum value for today
+        if (update.data && update.data[today]) {
+          if (
+            !watchDataCache ||
+            (watchDataCache[today] || 0) < update.data[today]
+          ) {
+            console.log('[OStats] Merging data from another tab before update')
+            watchDataCache = update.data
+            watchDataLoaded = true
+            lastSaveTimestamp = update.timestamp
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[OStats] Failed to check localStorage for updates:', e)
+    }
+
+    // Use cached data if available
+    const cacheAge = Date.now() - lastSaveTimestamp
+    if (!watchDataCache || cacheAge > 60000) {
+      console.log('[OStats] Cache stale or missing, reloading from disk')
+      watchDataLoaded = false
+      watchDataCache = null
+    }
 
     const data = await loadWatchTimeData()
-    const today = getTodayDate()
 
     // Safety check: if data is empty and we don't have cache loaded, something went wrong
     if (Object.keys(data).length === 0 && !watchDataLoaded) {
@@ -344,6 +480,9 @@
 
     // Update total time (simple format - just a number)
     dataCopy[today] += seconds
+
+    // Broadcast update to other tabs
+    broadcastUpdate(dataCopy)
 
     await saveWatchTimeData(dataCopy)
   }
