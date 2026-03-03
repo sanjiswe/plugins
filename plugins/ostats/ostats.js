@@ -1081,21 +1081,26 @@
 
       try {
         const watchTimeData = await loadWatchTimeData()
+        const scenes = await getScenesWithOHistory()
+        const oHistoryCache = buildOHistoryDayMap(scenes)
 
-        // Clean data for export
+        // Clean data for export and add O counts
         const cleanedData = {}
         Object.keys(watchTimeData).forEach((day) => {
           const dayData = watchTimeData[day]
+          let watchSeconds = 0
+          
           if (typeof dayData === 'number') {
-            // Already in simple format
-            cleanedData[day] = dayData
+            watchSeconds = dayData
           } else if (typeof dayData === 'object' && 'totalTime' in dayData) {
-            // Old format with videos - migrate to simple format
-            cleanedData[day] = dayData.totalTime || 0
-          } else {
-            // Unknown format
-            cleanedData[day] = 0
+            watchSeconds = dayData.totalTime || 0
           }
+          
+          // Get O count for this day
+          const oCount = oHistoryCache.dayTotals[day] || 0
+          
+          // Format as "watchTime,oCount"
+          cleanedData[day] = `${watchSeconds},${oCount}`
         })
 
         // Create JSON with metadata
@@ -1105,8 +1110,9 @@
           data: cleanedData,
           totalDays: Object.keys(cleanedData).length,
           totalSeconds: Object.values(cleanedData).reduce((sum, dayData) => {
-            // Simplified format: just numbers
-            return sum + (typeof dayData === 'number' ? dayData : 0)
+            // Parse watch time from "watchTime,oCount" format
+            const watchTime = typeof dayData === 'string' ? parseInt(dayData.split(',')[0]) : (typeof dayData === 'number' ? dayData : 0)
+            return sum + watchTime
           }, 0),
         }
 
@@ -1220,13 +1226,28 @@
             throw new Error('Invalid file format')
           }
 
+          // Strip O counts from import data (format: "watchTime,oCount")
+          const cleanedDataToImport = {}
+          Object.keys(dataToImport).forEach((day) => {
+            const value = dataToImport[day]
+            if (typeof value === 'string' && value.includes(',')) {
+              // New format: "watchTime,oCount" - extract just watch time
+              cleanedDataToImport[day] = parseInt(value.split(',')[0])
+            } else if (typeof value === 'number') {
+              // Old format: just a number
+              cleanedDataToImport[day] = value
+            } else {
+              cleanedDataToImport[day] = 0
+            }
+          })
+
           console.log(
             '[OStats] Importing data sample:',
-            JSON.stringify(dataToImport).substring(0, 200),
+            JSON.stringify(cleanedDataToImport).substring(0, 200),
           )
 
           // Delete all local data and replace with imported data
-          await saveWatchTimeData(dataToImport)
+          await saveWatchTimeData(cleanedDataToImport)
 
           // Wait a bit for file write to complete
           await new Promise((resolve) => setTimeout(resolve, 500))
