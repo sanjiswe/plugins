@@ -1,4 +1,93 @@
 ;(function () {
+  // ===== UTILITY FUNCTIONS (Replaces CommunityScriptsUILibrary dependency) =====
+
+  // GraphQL API call function
+  async function callGQL(options) {
+    const response = await fetch('/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: options.query,
+        variables: options.variables || {},
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`GraphQL request failed: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    if (result.errors) {
+      console.error('[OStats] GraphQL errors:', result.errors)
+      throw new Error(result.errors[0]?.message || 'GraphQL query failed')
+    }
+
+    return result.data
+  }
+
+  // Path element listener - waits for specific page elements to load
+  function PathElementListener(pathPattern, elementSelector, callback) {
+    let lastPath = null
+    let isProcessing = false
+
+    const checkAndSetup = async () => {
+      const currentPath = window.location.pathname
+
+      // Check if we're on the right path
+      if (!currentPath.includes(pathPattern)) {
+        lastPath = currentPath
+        return
+      }
+
+      // Check if path changed or first load
+      if (currentPath === lastPath && isProcessing) {
+        return
+      }
+
+      // Find the target element
+      const element = document.querySelector(elementSelector)
+      if (!element) {
+        return
+      }
+
+      // Only run callback if path changed or first time
+      if (currentPath !== lastPath || !isProcessing) {
+        lastPath = currentPath
+        isProcessing = true
+        try {
+          await callback(element)
+        } finally {
+          isProcessing = false
+        }
+      }
+    }
+
+    // Check on page load
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', checkAndSetup)
+    } else {
+      checkAndSetup()
+    }
+
+    // Watch for navigation changes (SPA routing)
+    const observer = new MutationObserver(() => {
+      checkAndSetup()
+    })
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    })
+
+    // Also listen for popstate (back/forward navigation)
+    window.addEventListener('popstate', checkAndSetup)
+
+    // Check periodically as fallback
+    setInterval(checkAndSetup, 1000)
+  }
+
   // ===== WATCH TIME TRACKING =====
   // This section tracks actual play time per day similar to Stash's track-activity plugin
 
@@ -180,27 +269,22 @@
         const todaysTotal = data[today] || 0
         console.log('[OStats] Saving data, todays total:', todaysTotal)
 
-        const result = await csLib
-          .callGQL({
-            query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
+        const result = await callGQL({
+          query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
           runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
         }`,
-            variables: {
-              plugin_id: 'ostats',
-              task_name: 'saveWatchData',
-              args_map: {
-                watch_data: JSON.stringify(data),
-              },
+          variables: {
+            plugin_id: 'ostats',
+            task_name: 'saveWatchData',
+            args_map: {
+              watch_data: JSON.stringify(data),
             },
-          })
-          .catch((err) => {
-            console.error('[OStats] GraphQL Error:', err)
-            console.error(
-              '[OStats] Error details:',
-              JSON.stringify(err, null, 2),
-            )
-            throw err
-          })
+          },
+        }).catch((err) => {
+          console.error('[OStats] GraphQL Error:', err)
+          console.error('[OStats] Error details:', JSON.stringify(err, null, 2))
+          throw err
+        })
 
         // Update cache after successful save
         watchDataCache = data
@@ -711,9 +795,9 @@
         }
       }
     }`
-    return await csLib
-      .callGQL({ query })
-      .then((data) => data.findScenes?.scenes || [])
+    return await callGQL({ query }).then(
+      (data) => data.findScenes?.scenes || [],
+    )
   }
 
   // fetch all images with o_counter
@@ -730,9 +814,9 @@
         }
       }
     }`
-    return await csLib
-      .callGQL({ query })
-      .then((data) => data.findImages?.images || [])
+    return await callGQL({ query }).then(
+      (data) => data.findImages?.images || [],
+    )
   }
 
   // Helper function to get consistent YYYY-MM-DD date string in local timezone
@@ -1086,6 +1170,25 @@
     const todayStr = getLocalDateString(now)
     const hasOToday = daySet.has(todayStr)
 
+    // Count consecutive days without an O starting from today
+    let daysSinceLastO = 0
+    if (!hasOToday) {
+      // Count backwards from today until we find a day with an O
+      // Cap at 30 days to prevent counting indefinitely if no O history exists
+      const maxDaysToCheck = sortedDays.length > 0 ? 365 : 30
+      for (let i = 0; i < maxDaysToCheck; i++) {
+        const checkDate = new Date(now)
+        checkDate.setDate(now.getDate() - i)
+        const checkDateStr = getLocalDateString(checkDate)
+
+        if (daySet.has(checkDateStr)) {
+          // Found a day with an O, stop counting
+          break
+        }
+        daysSinceLastO++
+      }
+    }
+
     // If no O today, start checking from yesterday
     const startOffset = hasOToday ? 0 : 1
 
@@ -1141,12 +1244,25 @@
       highestStreakEnd = allSortedDays[allSortedDays.length - 1]
     }
 
-    // Show tombstone if there's a streak but no O today (streak will be lost)
+    // Determine if we should show "No Nut Streak" mode (2 or more days without O)
+    // Only activate if there's some O history (otherwise streak is just 0)
+    const isNoNutMode =
+      sortedDays.length > 0 && daysSinceLastO > 1 && !hasOToday
+
     let displayStreak
-    if (streak > 0 && !hasOToday) {
+    let streakHeading
+    if (isNoNutMode) {
+      // No Nut Streak Counter mode
+      displayStreak = `${daysSinceLastO} 🥜`
+      streakHeading = 'No Nut Streak'
+    } else if (streak > 0 && !hasOToday) {
+      // Show tombstone if there's a streak but no O today (streak will be lost)
       displayStreak = streak > 1 ? `${streak} 🪦` : `${streak} 🪦`
+      streakHeading = 'Streak'
     } else {
+      // Normal streak mode
       displayStreak = streak > 1 ? `${streak} 🔥` : streak
+      streakHeading = 'Streak'
     }
 
     // Format tooltip with dates
@@ -1158,7 +1274,7 @@
       }
       tooltip = `Highest Streak: ${highestStreak} days\n${formatDate(highestStreakStart)}\nto\n${formatDate(highestStreakEnd)}`
     }
-    createStatElement(row, displayStreak, 'Streak', tooltip)
+    createStatElement(row, displayStreak, streakHeading, tooltip)
   }
 
   // average O per minute of watch time (overall)
@@ -3111,11 +3227,7 @@
     window.onThisDayRender = renderDay
   }
 
-  csLib.PathElementListener(
-    '/stats',
-    'div.container-fluid div.mt-5',
-    setupStats,
-  )
+  PathElementListener('/stats', 'div.container-fluid div.mt-5', setupStats)
   async function setupStats(el) {
     if (document.querySelector('.custom-stats-row')) return
     const changelog = el.querySelector('div.changelog')
