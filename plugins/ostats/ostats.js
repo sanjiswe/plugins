@@ -27,6 +27,132 @@
     return result.data
   }
 
+  // ===== DATA CACHE HELPERS =====
+  const SCENES_CORE_CACHE_KEY = 'ostats_scenes_core_v1'
+  const SCENES_FULL_CACHE_KEY = 'ostats_scenes_full_v1'
+  const STATS_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+
+  const inFlightDataRequests = {
+    scenesCore: null,
+    scenesFull: null,
+  }
+
+  function safeReadCache(cacheKey, maxAgeMs = STATS_CACHE_TTL_MS) {
+    try {
+      const raw = localStorage.getItem(cacheKey)
+      if (!raw) return null
+
+      const parsed = JSON.parse(raw)
+      if (!parsed || !Array.isArray(parsed.data)) return null
+
+      const age = Date.now() - (parsed.savedAt || 0)
+      if (age > maxAgeMs) return null
+
+      return parsed.data
+    } catch (e) {
+      console.warn('[OStats] Failed to read cache:', cacheKey, e)
+      return null
+    }
+  }
+
+  function safeWriteCache(cacheKey, data) {
+    try {
+      localStorage.setItem(
+        cacheKey,
+        JSON.stringify({
+          savedAt: Date.now(),
+          data,
+        }),
+      )
+    } catch (e) {
+      // Large payloads can exceed localStorage quota. This should not block rendering.
+      console.warn('[OStats] Failed to write cache:', cacheKey, e)
+    }
+  }
+
+  function sanitizeSceneForCache(scene, includePlayHistory) {
+    return {
+      id: scene.id,
+      title: scene.title || null,
+      o_counter: scene.o_counter || 0,
+      o_history: Array.isArray(scene.o_history) ? scene.o_history : [],
+      play_duration: scene.play_duration || 0,
+      play_history:
+        includePlayHistory && Array.isArray(scene.play_history)
+          ? scene.play_history
+          : [],
+      files: [{ basename: scene.files?.[0]?.basename || '' }],
+      paths: { screenshot: scene.paths?.screenshot || '' },
+    }
+  }
+
+  async function fetchScenesData(includePlayHistory) {
+    const playHistoryField = includePlayHistory ? 'play_history' : ''
+    const query = `query {
+      findScenes(scene_filter: {}, filter: { per_page: -1 }) {
+        scenes {
+          id
+          title
+          o_counter
+          o_history
+          play_duration
+          ${playHistoryField}
+          files {
+            basename
+          }
+          paths {
+            screenshot
+          }
+        }
+      }
+    }`
+
+    const data = await callGQL({ query })
+    const scenes = data.findScenes?.scenes || []
+    return scenes.map((scene) =>
+      sanitizeSceneForCache(scene, includePlayHistory),
+    )
+  }
+
+  async function getScenesData(includePlayHistory = false, options = {}) {
+    const { forceRefresh = false } = options
+    const cacheKey = includePlayHistory
+      ? SCENES_FULL_CACHE_KEY
+      : SCENES_CORE_CACHE_KEY
+    const inFlightKey = includePlayHistory ? 'scenesFull' : 'scenesCore'
+
+    if (!forceRefresh) {
+      const cached = safeReadCache(cacheKey)
+      if (cached) {
+        return cached
+      }
+    }
+
+    if (inFlightDataRequests[inFlightKey]) {
+      return inFlightDataRequests[inFlightKey]
+    }
+
+    inFlightDataRequests[inFlightKey] = fetchScenesData(includePlayHistory)
+      .then((scenes) => {
+        safeWriteCache(cacheKey, scenes)
+        return scenes
+      })
+      .finally(() => {
+        inFlightDataRequests[inFlightKey] = null
+      })
+
+    return inFlightDataRequests[inFlightKey]
+  }
+
+  async function getScenesWithOHistory(options = {}) {
+    // Core data for top-level stats does not require play history.
+    return getScenesData(false, options)
+  }
+
+  async function getScenesWithPlayHistory(options = {}) {
+    return getScenesData(true, options)
+  }
+
   // Path element listener - waits for specific page elements to load
   function PathElementListener(pathPattern, elementSelector, callback) {
     let lastPath = null
@@ -91,23 +217,20 @@
   // ===== WATCH TIME TRACKING =====
   // This section tracks actual play time per day similar to Stash's track-activity plugin
 
-  const WATCH_HISTORY_FILE = 'watch_data.json'
   const TRACKING_INTERVAL = 10000 // Track every 10 seconds
-  const SAVE_INTERVAL = 5000 // Save every 5 seconds
 
   // In-memory cache of watch data
   let watchDataCache = null
   let watchDataLoaded = false
   let lastSaveTimestamp = 0 // Track when we last saved to detect stale data
   let isSaving = false // Prevent concurrent saves
-  let pendingSavePromise = null // Track in-flight save operations
+  let pendingSavePromise = Promise.resolve() // Serialize in-flight save operations
   let saveDebounceTimer = null // Debounce timer for save operations
   let lastQueuedJobId = null // Track the most recent queued job ID
 
   let trackingIntervalId = null
-  let currentSessionTime = 0
-  let lastSaveTime = 0
-  let trackingStartTime = 0 // Track when playback started
+  let trackingLastTickTime = 0
+  const activeVideoElements = new Set()
   let currentSceneInfo = null // Track current scene being watched
 
   // Cross-tab communication via localStorage
@@ -487,118 +610,109 @@
     await saveWatchTimeData(dataCopy)
   }
 
-  // Start tracking watch time
-  function startWatchTimeTracking() {
-    if (trackingIntervalId) return // Already tracking
+  function queueWatchTimeSave(seconds) {
+    if (seconds <= 0) return pendingSavePromise
 
-    currentSessionTime = 0
-    const now = Date.now()
-    lastSaveTime = now
-    trackingStartTime = now
-    currentSceneInfo = getCurrentSceneInfo() // Capture scene info
-
-    trackingIntervalId = setInterval(() => {
-      const now = Date.now()
-
-      // Normalize trackingStartTime units (defend against accidental seconds vs ms)
-      let startMs = trackingStartTime || 0
-      if (startMs > 0 && startMs < 1e11) {
-        // Likely stored as seconds; convert to ms
-        console.warn(
-          '[OStats] Normalizing trackingStartTime from seconds to ms',
+    const sceneLog = currentSceneInfo ? ` (${currentSceneInfo.title})` : ''
+    pendingSavePromise = pendingSavePromise
+      .then(() => addWatchTime(seconds, currentSceneInfo))
+      .then(() => {
+        console.log(
+          `[OStats] Saved ${seconds}s watch time for ${getTodayDate()}${sceneLog}`,
         )
-        startMs = startMs * 1000
-      }
+      })
+      .catch((err) => {
+        console.error('[OStats] Failed queued watch time save:', err)
+      })
 
-      let totalElapsed = startMs > 0 ? Math.floor((now - startMs) / 1000) : 0
-      // Clamp implausible elapsed times (avoid counting epoch seconds when startMs is invalid)
-      if (totalElapsed < 0) totalElapsed = 0
-      if (totalElapsed > 86400) {
-        console.warn(
-          '[OStats] Clamping implausible totalElapsed:',
-          totalElapsed,
-        )
-        totalElapsed = 86400
-      }
-
-      const sinceSave = (now - lastSaveTime) / 1000
-
-      // Save every 5 seconds
-      if (sinceSave >= 5) {
-        const timeToSave = totalElapsed - currentSessionTime
-        if (timeToSave > 0) {
-          addWatchTime(timeToSave, currentSceneInfo)
-          const sceneLog = currentSceneInfo
-            ? ` (${currentSceneInfo.title})`
-            : ''
-          console.log(
-            `[OStats] Saved ${timeToSave}s watch time for ${getTodayDate()}${sceneLog}`,
-          )
-          currentSessionTime = totalElapsed
-        }
-        lastSaveTime = now
-      }
-    }, TRACKING_INTERVAL)
-
-    const sceneLog = currentSceneInfo ? ` for "${currentSceneInfo.title}"` : ''
-    console.log(`[OStats] Started watch time tracking${sceneLog}`)
+    return pendingSavePromise
   }
 
-  // Stop tracking watch time
-  async function stopWatchTimeTracking() {
+  function flushTrackedWatchTime() {
+    if (activeVideoElements.size === 0) {
+      trackingLastTickTime = Date.now()
+      return 0
+    }
+
+    const now = Date.now()
+    if (!trackingLastTickTime) {
+      trackingLastTickTime = now
+      return 0
+    }
+
+    const elapsedSeconds = Math.floor((now - trackingLastTickTime) / 1000)
+    if (elapsedSeconds <= 0) {
+      return 0
+    }
+
+    trackingLastTickTime += elapsedSeconds * 1000
+    const totalSeconds = elapsedSeconds * activeVideoElements.size
+    queueWatchTimeSave(totalSeconds)
+    return totalSeconds
+  }
+
+  function ensureTrackingInterval() {
+    if (trackingIntervalId) return
+
+    trackingLastTickTime = Date.now()
+    trackingIntervalId = setInterval(() => {
+      flushTrackedWatchTime()
+    }, TRACKING_INTERVAL)
+  }
+
+  // Start tracking watch time for a specific video element.
+  function startWatchTimeTracking(videoElement) {
+    if (videoElement && activeVideoElements.has(videoElement)) {
+      return
+    }
+
+    flushTrackedWatchTime()
+
+    if (videoElement) {
+      activeVideoElements.add(videoElement)
+    }
+
+    if (!currentSceneInfo) {
+      currentSceneInfo = getCurrentSceneInfo()
+    }
+
+    ensureTrackingInterval()
+    console.log(
+      '[OStats] Active video trackers:',
+      activeVideoElements.size,
+      currentSceneInfo ? `(${currentSceneInfo.title})` : '',
+    )
+  }
+
+  // Stop tracking watch time for a specific video element.
+  async function stopWatchTimeTracking(videoElement) {
+    flushTrackedWatchTime()
+
+    if (videoElement) {
+      activeVideoElements.delete(videoElement)
+    } else {
+      activeVideoElements.clear()
+    }
+
+    if (activeVideoElements.size > 0) {
+      trackingLastTickTime = Date.now()
+      console.log('[OStats] Active video trackers:', activeVideoElements.size)
+      return
+    }
+
     if (trackingIntervalId) {
       clearInterval(trackingIntervalId)
       trackingIntervalId = null
-
-      // Calculate actual elapsed time and save any remaining time IMMEDIATELY
-      const now = Date.now()
-      // Safety check: only calculate if trackingStartTime is valid
-      if (trackingStartTime > 0) {
-        // Normalize trackingStartTime units (seconds vs ms defense)
-        let startMs = trackingStartTime
-        if (startMs > 0 && startMs < 1e11) {
-          console.warn(
-            '[OStats] Normalizing trackingStartTime from seconds to ms',
-          )
-          startMs = startMs * 1000
-        }
-
-        let totalElapsed = Math.floor((now - startMs) / 1000)
-        if (totalElapsed < 0) totalElapsed = 0
-        if (totalElapsed > 86400) {
-          console.warn(
-            '[OStats] Clamping implausible totalElapsed on stop:',
-            totalElapsed,
-          )
-          totalElapsed = 86400
-        }
-
-        const remainingTime = totalElapsed - currentSessionTime
-
-        if (remainingTime > 0) {
-          await addWatchTime(remainingTime, currentSceneInfo)
-          const sceneLog = currentSceneInfo
-            ? ` (${currentSceneInfo.title})`
-            : ''
-          console.log(
-            `[OStats] Final save: ${remainingTime}s watch time for ${getTodayDate()}${sceneLog}`,
-          )
-        }
-      }
-      currentSessionTime = 0
-      trackingStartTime = 0
-
-      // Wait for any pending saves to complete before clearing scene info
-      if (pendingSavePromise) {
-        console.log(
-          '[OStats] Waiting for pending save to complete before stopping',
-        )
-        await pendingSavePromise
-      }
-
-      currentSceneInfo = null // Clear scene info
-      console.log('[OStats] Stopped watch time tracking')
     }
+
+    trackingLastTickTime = 0
+    await pendingSavePromise
+    currentSceneInfo = null
+    console.log('[OStats] Stopped watch time tracking')
+  }
+
+  async function stopAllWatchTimeTracking() {
+    await stopWatchTimeTracking(null)
   }
 
   // Check if we're currently on a scene page
@@ -608,6 +722,44 @@
 
   // Hook into video player events
   function setupVideoPlayerTracking() {
+    function attachTrackingToVideo(videoPlayer) {
+      if (!videoPlayer || videoPlayer.dataset.ostatsTracking) return
+
+      videoPlayer.dataset.ostatsTracking = 'true'
+
+      videoPlayer.addEventListener('playing', () => {
+        console.log('[OStats] Video playing')
+        startWatchTimeTracking(videoPlayer)
+      })
+
+      videoPlayer.addEventListener('pause', async () => {
+        console.log('[OStats] Video paused')
+        await stopWatchTimeTracking(videoPlayer)
+      })
+
+      videoPlayer.addEventListener('ended', async () => {
+        console.log('[OStats] Video ended')
+        await stopWatchTimeTracking(videoPlayer)
+      })
+
+      videoPlayer.addEventListener('waiting', async () => {
+        console.log('[OStats] Video waiting/buffering')
+        await stopWatchTimeTracking(videoPlayer)
+      })
+
+      videoPlayer.addEventListener('stalled', async () => {
+        console.log('[OStats] Video stalled')
+        await stopWatchTimeTracking(videoPlayer)
+      })
+
+      // If already playing when attached, start tracking immediately.
+      if (!videoPlayer.paused && !videoPlayer.ended) {
+        startWatchTimeTracking(videoPlayer)
+      }
+
+      console.log('[OStats] Video player tracking setup complete')
+    }
+
     // Monitor route changes to stop tracking when leaving scene page
     let lastPath = window.location.pathname
     const checkPathChange = setInterval(async () => {
@@ -615,49 +767,19 @@
       if (currentPath !== lastPath) {
         lastPath = currentPath
         // If we've left the scene page and tracking is active, stop it
-        if (!isOnScenePage() && trackingIntervalId) {
+        if (!isOnScenePage() && activeVideoElements.size > 0) {
           console.log('[OStats] Left scene page, stopping tracking')
-          await stopWatchTimeTracking()
+          await stopAllWatchTimeTracking()
         }
       }
     }, 500) // Check every 500ms
 
     // Use MutationObserver to detect when video player is added to DOM
-    const observer = new MutationObserver((mutations) => {
-      const videoPlayer = document.querySelector('video')
-      if (videoPlayer && !videoPlayer.dataset.ostatsTracking) {
-        videoPlayer.dataset.ostatsTracking = 'true'
-
-        videoPlayer.addEventListener('playing', () => {
-          console.log('[OStats] Video playing')
-          startWatchTimeTracking()
-        })
-
-        videoPlayer.addEventListener('pause', async () => {
-          console.log('[OStats] Video paused')
-          await stopWatchTimeTracking()
-        })
-
-        videoPlayer.addEventListener('ended', async () => {
-          console.log('[OStats] Video ended')
-          // Force immediate save of any remaining time
-          await stopWatchTimeTracking()
-          // Give the save operation a moment to complete
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        })
-
-        videoPlayer.addEventListener('waiting', async () => {
-          console.log('[OStats] Video waiting/buffering')
-          await stopWatchTimeTracking()
-        })
-
-        videoPlayer.addEventListener('stalled', async () => {
-          console.log('[OStats] Video stalled')
-          await stopWatchTimeTracking()
-        })
-
-        console.log('[OStats] Video player tracking setup complete')
-      }
+    const observer = new MutationObserver(() => {
+      const videoPlayers = document.querySelectorAll('video')
+      videoPlayers.forEach((videoPlayer) => {
+        attachTrackingToVideo(videoPlayer)
+      })
     })
 
     observer.observe(document.body, {
@@ -666,36 +788,10 @@
     })
 
     // Also check if video is already present
-    const existingVideo = document.querySelector('video')
-    if (existingVideo && !existingVideo.dataset.ostatsTracking) {
-      existingVideo.dataset.ostatsTracking = 'true'
-
-      existingVideo.addEventListener('playing', startWatchTimeTracking)
-      existingVideo.addEventListener(
-        'pause',
-        async () => await stopWatchTimeTracking(),
-      )
-      existingVideo.addEventListener('ended', async () => {
-        console.log('[OStats] Video ended (existing)')
-        // Force immediate save of any remaining time
-        await stopWatchTimeTracking()
-        // Give the save operation a moment to complete
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      })
-      existingVideo.addEventListener(
-        'waiting',
-        async () => await stopWatchTimeTracking(),
-      )
-      existingVideo.addEventListener(
-        'stalled',
-        async () => await stopWatchTimeTracking(),
-      )
-
-      // Check if video is already playing
-      if (!existingVideo.paused) {
-        startWatchTimeTracking()
-      }
-    }
+    const existingVideos = document.querySelectorAll('video')
+    existingVideos.forEach((videoPlayer) => {
+      attachTrackingToVideo(videoPlayer)
+    })
   }
 
   // Initialize video player tracking on page load
@@ -703,19 +799,19 @@
 
   // Save any remaining watch time before page unload
   window.addEventListener('beforeunload', (e) => {
-    if (currentSessionTime > 0 || trackingIntervalId) {
+    if (activeVideoElements.size > 0 || trackingIntervalId) {
       console.log('[OStats] Page unloading, saving watch time...')
-      // Stop tracking synchronously to save remaining time
+      const pendingSeconds = flushTrackedWatchTime()
+
       if (trackingIntervalId) {
         clearInterval(trackingIntervalId)
         trackingIntervalId = null
       }
-      // Add remaining time immediately (synchronous)
-      if (currentSessionTime > 0) {
+
+      if (pendingSeconds > 0) {
         const data = watchDataCache || {}
         const today = getTodayDate()
 
-        // Migrate old format if needed
         if (
           data[today] &&
           typeof data[today] === 'object' &&
@@ -724,14 +820,12 @@
           data[today] = data[today].totalTime || 0
         }
 
-        // Simple format: just add to the number
         if (!data[today]) {
           data[today] = 0
         }
-        data[today] += currentSessionTime
+        data[today] += pendingSeconds
 
         watchDataCache = data
-        // Try to use sendBeacon for more reliable save on unload
         try {
           navigator.sendBeacon(
             '/graphql',
@@ -749,48 +843,12 @@
         } catch (err) {
           console.error('[OStats] Failed to send beacon:', err)
         }
-        console.log(`[OStats] Beforeunload: saved ${currentSessionTime}s`)
-        currentSessionTime = 0
+        console.log(`[OStats] Beforeunload: saved ${pendingSeconds}s`)
       }
-    }
-  })
 
-  // Also listen for visibility changes (tab switching, minimizing)
-  document.addEventListener('visibilitychange', async () => {
-    // If the page becomes hidden, stop tracking to avoid counting background time
-    if (document.hidden && trackingIntervalId) {
-      console.log('[OStats] Page hidden, stopping tracking')
-      await stopWatchTimeTracking()
-      return
-    }
-
-    // If the page becomes visible again, attempt to resume tracking
-    if (!document.hidden) {
-      try {
-        // Only resume if we're on a scene page and a video is present and playing
-        if (isOnScenePage()) {
-          const video = document.querySelector('video')
-          if (video) {
-            // If video appears to be playing (not paused) resume tracking
-            if (!video.paused) {
-              console.log(
-                '[OStats] Page visible and video playing, resuming tracking',
-              )
-              startWatchTimeTracking()
-            } else {
-              // Video is paused; do not start tracking until playback resumes.
-              console.log(
-                '[OStats] Page visible but video is paused; will resume on play event',
-              )
-            }
-          } else {
-            // No video element yet; start tracking when video starts playing (observer/setup already does this)
-            console.log('[OStats] Page visible but no video element found')
-          }
-        }
-      } catch (err) {
-        console.error('[OStats] Error while handling visibilitychange:', err)
-      }
+      activeVideoElements.clear()
+      trackingLastTickTime = 0
+      currentSceneInfo = null
     }
   })
 
@@ -864,98 +922,6 @@
     statHeading.style.margin = '0'
     statHeading.style.fontSize = '0.85rem'
     link.appendChild(statHeading)
-  }
-
-  function createGalleryImageStatElement(container, image, title, heading) {
-    const statEl = document.createElement('div')
-    statEl.classList.add('stats-element')
-    statEl.style.maxWidth = '250px'
-    statEl.style.textAlign = 'center'
-    container.appendChild(statEl)
-
-    const link = document.createElement('a')
-    link.href = `/images/${image.id}`
-    link.style.textDecoration = 'none'
-    link.style.display = 'block'
-    statEl.appendChild(link)
-
-    const imgContainer = document.createElement('div')
-    imgContainer.style.width = '100%'
-    imgContainer.style.height = '140px'
-    imgContainer.style.backgroundColor = '#000'
-    imgContainer.style.borderRadius = '4px'
-    imgContainer.style.marginBottom = '0.5rem'
-    imgContainer.style.display = 'flex'
-    imgContainer.style.alignItems = 'center'
-    imgContainer.style.justifyContent = 'center'
-    imgContainer.style.overflow = 'hidden'
-    link.appendChild(imgContainer)
-
-    const img = document.createElement('img')
-    img.src = image.paths.image
-    img.style.maxWidth = '100%'
-    img.style.maxHeight = '100%'
-    img.style.objectFit = 'contain'
-    img.style.display = 'block'
-    imgContainer.appendChild(img)
-
-    const statTitle = document.createElement('p')
-    statTitle.classList.add('title')
-    statTitle.innerText = title
-    statTitle.style.margin = '0'
-    statTitle.style.fontSize = '0.9rem'
-    link.appendChild(statTitle)
-
-    const statHeading = document.createElement('p')
-    statHeading.classList.add('heading')
-    statHeading.innerText = heading
-    statHeading.style.margin = '0'
-    statHeading.style.fontSize = '0.85rem'
-    link.appendChild(statHeading)
-  }
-
-  // fetch all scenes with o_history for orgasm stats
-  async function getScenesWithOHistory() {
-    const query = `query {
-      findScenes(scene_filter: {}, filter: { per_page: -1 }) {
-        scenes {
-          id
-          title
-          o_counter
-          o_history
-          play_duration
-          play_history
-          files {
-            basename
-          }
-          paths {
-            screenshot
-          }
-        }
-      }
-    }`
-    return await callGQL({ query }).then(
-      (data) => data.findScenes?.scenes || [],
-    )
-  }
-
-  // fetch all images with o_counter
-  async function getImagesWithOCounter() {
-    const query = `query {
-      findImages(image_filter: {}, filter: { per_page: -1 }) {
-        images {
-          id
-          title
-          o_counter
-          paths {
-            image
-          }
-        }
-      }
-    }`
-    return await callGQL({ query }).then(
-      (data) => data.findImages?.images || [],
-    )
   }
 
   // Helper function to get consistent YYYY-MM-DD date string in local timezone
@@ -1054,7 +1020,7 @@
   }
 
   // Export/Import watch time data as JSON
-  function createWatchTimeExportButton(row) {
+  function createWatchTimeExportButton(row, scenesForExport = null) {
     const container = document.createElement('div')
     container.style.display = 'flex'
     container.style.gap = '1rem'
@@ -1081,7 +1047,7 @@
 
       try {
         const watchTimeData = await loadWatchTimeData()
-        const scenes = await getScenesWithOHistory()
+        const scenes = scenesForExport || (await getScenesWithOHistory())
         const oHistoryCache = buildOHistoryDayMap(scenes)
 
         // Clean data for export and add O counts
@@ -1089,16 +1055,16 @@
         Object.keys(watchTimeData).forEach((day) => {
           const dayData = watchTimeData[day]
           let watchSeconds = 0
-          
+
           if (typeof dayData === 'number') {
             watchSeconds = dayData
           } else if (typeof dayData === 'object' && 'totalTime' in dayData) {
             watchSeconds = dayData.totalTime || 0
           }
-          
+
           // Get O count for this day
           const oCount = oHistoryCache.dayTotals[day] || 0
-          
+
           // Format as "watchTime,oCount"
           cleanedData[day] = `${watchSeconds},${oCount}`
         })
@@ -1111,7 +1077,12 @@
           totalDays: Object.keys(cleanedData).length,
           totalSeconds: Object.values(cleanedData).reduce((sum, dayData) => {
             // Parse watch time from "watchTime,oCount" format
-            const watchTime = typeof dayData === 'string' ? parseInt(dayData.split(',')[0]) : (typeof dayData === 'number' ? dayData : 0)
+            const watchTime =
+              typeof dayData === 'string'
+                ? parseInt(dayData.split(',')[0])
+                : typeof dayData === 'number'
+                  ? dayData
+                  : 0
             return sum + watchTime
           }, 0),
         }
@@ -1515,12 +1486,12 @@
   }
 
   // longest watched day
-  async function createLongestWatchedDay(row) {
-    const scenes = await getScenesWithOHistory()
+  async function createLongestWatchedDay(row, scenes = null) {
+    const sceneList = scenes || (await getScenesWithPlayHistory())
     const dayTotals = {}
 
     // Calculate total watch time per day
-    scenes.forEach((scene) => {
+    sceneList.forEach((scene) => {
       if (scene.play_history && scene.play_history.length > 0) {
         scene.play_history.forEach((timestamp) => {
           // Convert UTC timestamp to local timezone
@@ -1588,12 +1559,12 @@
   }
 
   // longest watched scene
-  async function createLongestWatchedScene(row) {
-    const scenes = await getScenesWithOHistory()
+  async function createLongestWatchedScene(row, scenes = null) {
+    const sceneList = scenes || (await getScenesWithOHistory())
     let maxScene = null
     let maxDuration = 0
 
-    scenes.forEach((scene) => {
+    sceneList.forEach((scene) => {
       const duration = scene.play_duration || 0
       if (duration > maxDuration) {
         maxDuration = duration
@@ -1616,30 +1587,6 @@
       createImageStatElement(row, maxScene, timeStr, 'Longest Play Duration')
     } else {
       createStatElement(row, 'N/A', 'Longest Play Duration')
-    }
-  }
-
-  // image with most orgasms
-  async function createMostOImage(row) {
-    const images = await getImagesWithOCounter()
-    let maxImage = null
-    let maxCount = 0
-
-    images.forEach((image) => {
-      const count = image.o_counter || 0
-      if (count > maxCount) {
-        maxCount = count
-        maxImage = image
-      }
-    })
-
-    if (maxImage && maxCount > 0) {
-      createGalleryImageStatElement(
-        row,
-        maxImage,
-        maxCount,
-        "Image with Most O's",
-      )
     }
   }
 
@@ -3441,7 +3388,7 @@
     rowSix.style.paddingBottom = '12rem'
     el.insertBefore(rowSix, changelog)
 
-    // OPTIMIZATION: Load all data once upfront
+    // Fast path: load lightweight stats data first.
     const [scenes, watchTimeData] = await Promise.all([
       getScenesWithOHistory(),
       loadWatchTimeData(),
@@ -3468,7 +3415,26 @@
 
     await createWeeklyBarChart(rowThree, scenes, oHistoryCache)
     await createWatchTimeBarChart(rowFour, watchTimeData)
-    createWatchTimeExportButton(rowFive)
-    await createOnThisDaySection(rowSix, scenes, oHistoryCache)
+    createWatchTimeExportButton(rowFive, scenes)
+
+    const onThisDayLoading = document.createElement('div')
+    onThisDayLoading.style.textAlign = 'center'
+    onThisDayLoading.style.width = '100%'
+    onThisDayLoading.style.color = '#888'
+    onThisDayLoading.style.padding = '2rem 1rem'
+    onThisDayLoading.innerText = 'Loading On This Day...'
+    rowSix.appendChild(onThisDayLoading)
+
+    // Heavy path: fetch full play history in background and hydrate the section.
+    getScenesWithPlayHistory()
+      .then(async (fullScenes) => {
+        rowSix.innerHTML = ''
+        const fullHistoryCache = buildOHistoryDayMap(fullScenes)
+        await createOnThisDaySection(rowSix, fullScenes, fullHistoryCache)
+      })
+      .catch((err) => {
+        console.error('[OStats] Failed loading On This Day data:', err)
+        onThisDayLoading.innerText = 'Failed to load On This Day data.'
+      })
   }
 })()
