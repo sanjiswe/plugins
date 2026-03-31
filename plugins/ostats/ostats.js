@@ -1480,7 +1480,7 @@
     createStatElement(
       row,
       `${displayText} ⏱️`,
-      'Mean Jerk Time',
+      'Average min/O',
       'Average minutes to orgasm ratio',
     )
   }
@@ -3319,7 +3319,7 @@
         avgMinPerOSummary.appendChild(avgMinPerODisplay)
 
         const avgMinPerOLabel = document.createElement('div')
-        avgMinPerOLabel.innerText = 'MJT'
+        avgMinPerOLabel.innerText = 'Avg min/O'
         avgMinPerOLabel.style.fontSize = '0.9rem'
         avgMinPerOLabel.style.color = '#888'
         avgMinPerOLabel.style.marginTop = '0.25rem'
