@@ -31,13 +31,33 @@
   const SCENES_CORE_CACHE_KEY = 'ostats_scenes_core_v1'
   const SCENES_FULL_CACHE_KEY = 'ostats_scenes_full_v1'
   const STATS_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+  const STATS_USE_CACHE_KEY = 'ostats_use_cache'
 
   const inFlightDataRequests = {
     scenesCore: null,
     scenesFull: null,
   }
 
+  function shouldUseCache() {
+    try {
+      const pref = localStorage.getItem(STATS_USE_CACHE_KEY)
+      return pref === 'true'
+    } catch (e) {
+      return false
+    }
+  }
+
+  function setShouldUseCache(value) {
+    try {
+      localStorage.setItem(STATS_USE_CACHE_KEY, value ? 'true' : 'false')
+    } catch (e) {
+      console.warn('[OStats] Failed to save cache preference:', e)
+    }
+  }
+
   function safeReadCache(cacheKey, maxAgeMs = STATS_CACHE_TTL_MS) {
+    if (!shouldUseCache()) return null
+
     try {
       const raw = localStorage.getItem(cacheKey)
       if (!raw) return null
@@ -3347,24 +3367,31 @@
     separator.style.borderTop = '2px solid rgba(255, 255, 255, 0.2)'
     el.insertBefore(separator, changelog)
 
-    // Create header for O stats
+    // Create header container
+    const headerContainer = document.createElement('div')
+    headerContainer.style.marginTop = '2rem'
+    headerContainer.style.marginBottom = '2rem'
+    headerContainer.style.display = 'flex'
+    headerContainer.style.justifyContent = 'center'
+    headerContainer.style.alignItems = 'center'
+    el.insertBefore(headerContainer, changelog)
+
     const oStatsHeader = document.createElement('h3')
-    oStatsHeader.style.marginTop = '2rem'
-    oStatsHeader.style.marginBottom = '2rem'
-    oStatsHeader.style.textAlign = 'center'
     oStatsHeader.style.fontSize = '3rem'
-    // oStatsHeader.innerText = 'O Stats'
-    el.insertBefore(oStatsHeader, changelog)
+    oStatsHeader.style.margin = '0'
+    oStatsHeader.innerText = ''
+    headerContainer.appendChild(oStatsHeader)
 
     const rowOne = document.createElement('div')
     rowOne.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
     rowOne.style.justifyContent = 'center'
+    rowOne.style.marginTop = '1rem'
     el.insertBefore(rowOne, changelog)
     const rowTwo = document.createElement('div')
     rowTwo.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
     rowTwo.style.justifyContent = 'center'
     rowTwo.style.gap = '1rem'
-    rowTwo.style.paddingTop = '3rem'
+    rowTwo.style.paddingTop = '2rem'
     el.insertBefore(rowTwo, changelog)
     const rowThree = document.createElement('div')
     rowThree.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
@@ -3436,5 +3463,58 @@
         console.error('[OStats] Failed loading On This Day data:', err)
         onThisDayLoading.innerText = 'Failed to load On This Day data.'
       })
+
+    // Create bottom footer with cache toggle
+    const footerContainer = document.createElement('div')
+    footerContainer.style.marginTop = '4rem'
+    footerContainer.style.marginBottom = '2rem'
+    footerContainer.style.display = 'flex'
+    footerContainer.style.justifyContent = 'center'
+    footerContainer.style.alignItems = 'center'
+    footerContainer.style.gap = '0.5rem'
+    footerContainer.style.fontSize = '0.9rem'
+    el.insertBefore(footerContainer, changelog)
+
+    const cacheCheckbox = document.createElement('input')
+    cacheCheckbox.type = 'checkbox'
+    cacheCheckbox.checked = shouldUseCache()
+    cacheCheckbox.style.cursor = 'pointer'
+    footerContainer.appendChild(cacheCheckbox)
+
+    const cacheLabel = document.createElement('label')
+    cacheLabel.innerText = 'Use cache'
+    cacheLabel.style.cursor = 'pointer'
+    cacheLabel.style.userSelect = 'none'
+    footerContainer.appendChild(cacheLabel)
+
+    const helpIcon = document.createElement('div')
+    helpIcon.innerText = '?'
+    helpIcon.style.width = '18px'
+    helpIcon.style.height = '18px'
+    helpIcon.style.borderRadius = '50%'
+    helpIcon.style.backgroundColor = '#555'
+    helpIcon.style.color = '#ccc'
+    helpIcon.style.display = 'flex'
+    helpIcon.style.alignItems = 'center'
+    helpIcon.style.justifyContent = 'center'
+    helpIcon.style.fontSize = '0.75rem'
+    helpIcon.style.fontWeight = 'bold'
+    helpIcon.style.cursor = 'help'
+    helpIcon.style.transition = 'background-color 0.2s, color 0.2s'
+    helpIcon.title = 'When enabled, stats are cached for 10 minutes to load faster. When disabled, stats always load fresh. Your preference is saved.'
+    helpIcon.addEventListener('mouseenter', () => {
+      helpIcon.style.backgroundColor = '#666'
+      helpIcon.style.color = '#fff'
+    })
+    helpIcon.addEventListener('mouseleave', () => {
+      helpIcon.style.backgroundColor = '#555'
+      helpIcon.style.color = '#ccc'
+    })
+    footerContainer.appendChild(helpIcon)
+
+    // Save preference when checkbox changes
+    cacheCheckbox.addEventListener('change', () => {
+      setShouldUseCache(cacheCheckbox.checked)
+    })
   }
 })()
