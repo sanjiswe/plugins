@@ -952,6 +952,10 @@
     return `${year}-${month}-${day}`
   }
 
+  function openSceneInNewTab(sceneId) {
+    window.open(`/scenes/${sceneId}`, '_blank', 'noopener,noreferrer')
+  }
+
   // OPTIMIZATION: Pre-process O history into a day map to avoid repeated iteration
   function buildOHistoryDayMap(scenes) {
     const dayMap = new Map()
@@ -3039,7 +3043,7 @@
           thumbnailPreview.style.display = 'none'
         })
         marker.addEventListener('click', () => {
-          window.location.href = `/scenes/${o.scene.id}`
+          openSceneInNewTab(o.scene.id)
         })
 
         timelineViz.appendChild(marker)
@@ -3135,7 +3139,7 @@
           })
 
           videoItem.addEventListener('click', () => {
-            window.location.href = `/scenes/${scene.id}`
+            openSceneInNewTab(scene.id)
           })
 
           const thumbnail = document.createElement('img')
