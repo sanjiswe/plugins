@@ -1,12 +1,81 @@
 name: O Stats
 description: Adds O stats to the stats page
-version: 1.0
+version: 1.1
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   javascript:
     - ostats.js
   assets:
     /: .
+settings:
+  hideTopStats:
+    displayName: Hide Top Stats
+    type: BOOLEAN
+    description: Hides the whole top row of stats (O's today, record day, streak, record session and average min/O). Default false.
+  hideSceneHighlights:
+    displayName: Hide Scene Highlights
+    type: BOOLEAN
+    description: Hides the whole scene highlights row (scene with most O's, longest play duration, most recent O and oldest O). Default false.
+  hideOGraph:
+    displayName: Hide O Graph
+    type: BOOLEAN
+    description: Hides the O count bar graph. Default false.
+  hideWatchTimeGraph:
+    displayName: Hide Watch Time Graph
+    type: BOOLEAN
+    description: Hides the watch time bar graph. Default false.
+  hideOnThisDay:
+    displayName: Hide On This Day
+    type: BOOLEAN
+    description: Hides the whole On This Day section, including its stats. Default false.
+  hideOnThisDayStats:
+    displayName: Hide On This Day Stats
+    type: BOOLEAN
+    description: Hides the stats at the bottom of the On This Day section (O's, watch time, videos watched and average min/O). Default false.
+  expandOnThisDayList:
+    displayName: Expand On This Day List
+    type: BOOLEAN
+    description: Shows the full Videos Watched list in the On This Day section by default instead of a shorter scrolling list. You can still collapse it with the button. Default false.
+  hideTopStatsOsToday:
+    displayName: "[Top Stats Row] Hide O's Today"
+    type: BOOLEAN
+    description: Hides the O's Today stat. Has no effect if Hide Top Stats is on. Default false.
+  hideTopStatsRecordDay:
+    displayName: '[Top Stats Row] Hide Record Day'
+    type: BOOLEAN
+    description: Hides the Record Day stat (most O's in a single day). Has no effect if Hide Top Stats is on. Default false.
+  hideTopStatsStreak:
+    displayName: '[Top Stats Row] Hide Streak'
+    type: BOOLEAN
+    description: Hides the Streak stat. Has no effect if Hide Top Stats is on. Default false.
+  hideTopStatsRecordSession:
+    displayName: '[Top Stats Row] Hide Record Session'
+    type: BOOLEAN
+    description: Hides the Record Session stat (most watch time in a single day). Has no effect if Hide Top Stats is on. Default false.
+  hideTopStatsAverageMinPerO:
+    displayName: '[Top Stats Row] Hide Average min/O'
+    type: BOOLEAN
+    description: Hides the Average min/O stat. Has no effect if Hide Top Stats is on. Default false.
+  hideSceneHighlightsMostOs:
+    displayName: "[Scene Highlights Row] Hide Scene with Most O's"
+    type: BOOLEAN
+    description: Hides the Scene with Most O's highlight. Has no effect if Hide Scene Highlights is on. Default false.
+  hideSceneHighlightsLongestPlay:
+    displayName: '[Scene Highlights Row] Hide Longest Play Duration'
+    type: BOOLEAN
+    description: Hides the Longest Play Duration highlight. Has no effect if Hide Scene Highlights is on. Default false.
+  hideSceneHighlightsMostRecentO:
+    displayName: '[Scene Highlights Row] Hide Most Recent O'
+    type: BOOLEAN
+    description: Hides the Most Recent O highlight. Has no effect if Hide Scene Highlights is on. Default false.
+  hideSceneHighlightsOldestO:
+    displayName: '[Scene Highlights Row] Hide Oldest O'
+    type: BOOLEAN
+    description: Hides the Oldest O highlight. Has no effect if Hide Scene Highlights is on. Default false.
+  hideExportImportButtons:
+    displayName: Hide Export/Import Buttons
+    type: BOOLEAN
+    description: Hides the Export JSON and Import JSON buttons. Default false.
 
 exec:
   - python

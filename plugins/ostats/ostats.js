@@ -27,6 +27,18 @@
     return result.data
   }
 
+  // ===== PLUGIN SETTINGS =====
+  // Settings are defined in ostats.yml and saved by Stash.
+  async function getPluginSettings() {
+    try {
+      const data = await callGQL({ query: 'query { configuration { plugins } }' })
+      return data.configuration?.plugins?.ostats || {}
+    } catch (e) {
+      console.warn('[OStats] Failed to load plugin settings:', e)
+      return {}
+    }
+  }
+
   // ===== SCENE DATA HELPERS =====
   const inFlightDataRequests = {
     scenesCore: null,
@@ -840,6 +852,8 @@
       statEl.title = tooltip
       statEl.style.cursor = 'help'
     }
+
+    return statHeading
   }
 
   function createImageStatElement(container, scene, title, heading) {
@@ -896,6 +910,46 @@
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     return `${year}-${month}-${day}`
+  }
+
+  // Show a YYYY-MM-DD day in the On This Day section and scroll to it
+  function openDayInOnThisDay(dayStr) {
+    // Parse date string properly to avoid timezone issues
+    const [year, month, day] = dayStr.split('-').map(Number)
+    const targetDate = new Date(year, month - 1, day)
+    const now = new Date()
+    const nowLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const dayDiff = Math.round((targetDate - nowLocal) / (1000 * 60 * 60 * 24))
+
+    if (window.onThisDayRender) {
+      window.onThisDayRender(dayDiff)
+    }
+
+    const section = document.getElementById('on-this-day-section')
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  // Replace a stat heading with "<label>: <date>" where the date opens
+  // that day in the On This Day section
+  function setHeadingWithDayLink(headingEl, label, dayStr) {
+    const [year, month, day] = dayStr.split('-')
+    headingEl.innerText = `${label}: `
+
+    const dateLink = document.createElement('span')
+    dateLink.innerText = `${month}/${day}/${year.slice(2)}`
+    dateLink.title = 'Open in On This Day'
+    dateLink.style.cursor = 'pointer'
+    dateLink.style.textDecoration = 'underline dotted'
+    dateLink.addEventListener('mouseenter', () => {
+      dateLink.style.textDecoration = 'underline'
+    })
+    dateLink.addEventListener('mouseleave', () => {
+      dateLink.style.textDecoration = 'underline dotted'
+    })
+    dateLink.addEventListener('click', () => openDayInOnThisDay(dayStr))
+    headingEl.appendChild(dateLink)
   }
 
   function openSceneInNewTab(sceneId) {
@@ -973,8 +1027,6 @@
     if (maxDay && maxDuration > 0) {
       const hours = Math.floor(maxDuration / 3600)
       const minutes = Math.floor((maxDuration % 3600) / 60)
-      const [year, month, day] = maxDay.split('-')
-      const formatted = `${month}/${day}/${year.slice(2)}`
 
       if (hours > 0) {
         title = `${hours}h ${minutes}m ⌛`
@@ -983,10 +1035,12 @@
       } else {
         title = `${Math.floor(maxDuration)}s ⌛`
       }
-      heading = `Record Session: ${formatted}`
     }
 
-    createStatElement(row, title, heading)
+    const headingEl = createStatElement(row, title, heading)
+    if (maxDay && maxDuration > 0) {
+      setHeadingWithDayLink(headingEl, 'Record Session', maxDay)
+    }
   }
 
   // Export/Import watch time data as JSON
@@ -1251,12 +1305,12 @@
     let heading = maxCount.toString()
     let title = 'Record Day'
     if (bestDay) {
-      const [year, month, day] = bestDay.split('-')
-      const formatted = `${month}/${day}/${year.slice(2)}`
-      heading = `Record Day: ${formatted}`
       title = `${maxCount} ☔`
     }
-    createStatElement(row, title, heading)
+    const headingEl = createStatElement(row, title, heading)
+    if (bestDay) {
+      setHeadingWithDayLink(headingEl, 'Record Day', bestDay)
+    }
   }
 
   // consecutive days streak
@@ -2012,7 +2066,7 @@
         bar.style.transition = 'opacity 0.2s'
         barContainer.appendChild(bar)
 
-        if (item.count > 0 && view !== 'year') {
+        if (item.count > 0) {
           bar.addEventListener('mouseenter', () => {
             bar.style.opacity = '0.7'
           })
@@ -2020,36 +2074,20 @@
             bar.style.opacity = '1'
           })
           bar.addEventListener('click', () => {
-            // Parse date string properly to avoid timezone issues
-            const dateParts = item.date.split('-')
-            const targetDate = new Date(
-              parseInt(dateParts[0]),
-              parseInt(dateParts[1]) - 1,
-              parseInt(dateParts[2]),
-            )
-            const now = new Date()
-            const nowLocal = new Date(
-              now.getFullYear(),
-              now.getMonth(),
-              now.getDate(),
-            )
-            const dayDiff = Math.round(
-              (targetDate - nowLocal) / (1000 * 60 * 60 * 24),
-            )
-
-            if (window.onThisDayRender) {
-              window.onThisDayRender(dayDiff)
-            }
-
-            const section = document.getElementById('on-this-day-section')
-            if (section) {
-              section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (view === 'year') {
+              // Switch to the month view for the clicked month
+              const [year, month] = item.date.split('-').map(Number)
+              selectedMonthOffset =
+                (year - now.getFullYear()) * 12 + (month - now.getMonth())
+              renderChart('month')
+            } else {
+              openDayInOnThisDay(item.date)
             }
           })
         }
 
-        // Update cursor for year view or if no data
-        if (view === 'year' || item.count === 0) {
+        // Update cursor if no data
+        if (item.count === 0) {
           bar.style.cursor = 'default'
         }
 
@@ -2517,7 +2555,7 @@
         bar.style.transition = 'opacity 0.2s'
         barContainer.appendChild(bar)
 
-        if (item.duration > 0 && view !== 'year') {
+        if (item.duration > 0) {
           bar.addEventListener('mouseenter', () => {
             bar.style.opacity = '0.7'
           })
@@ -2525,36 +2563,20 @@
             bar.style.opacity = '1'
           })
           bar.addEventListener('click', () => {
-            // Parse date string properly to avoid timezone issues
-            const dateParts = item.date.split('-')
-            const targetDate = new Date(
-              parseInt(dateParts[0]),
-              parseInt(dateParts[1]) - 1,
-              parseInt(dateParts[2]),
-            )
-            const now = new Date()
-            const nowLocal = new Date(
-              now.getFullYear(),
-              now.getMonth(),
-              now.getDate(),
-            )
-            const dayDiff = Math.round(
-              (targetDate - nowLocal) / (1000 * 60 * 60 * 24),
-            )
-
-            if (window.onThisDayRender) {
-              window.onThisDayRender(dayDiff)
-            }
-
-            const section = document.getElementById('on-this-day-section')
-            if (section) {
-              section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            if (view === 'year') {
+              // Switch to the month view for the clicked month
+              const [year, month] = item.date.split('-').map(Number)
+              selectedMonthOffset =
+                (year - now.getFullYear()) * 12 + (month - now.getMonth())
+              renderChart('month')
+            } else {
+              openDayInOnThisDay(item.date)
             }
           })
         }
 
-        // Update cursor for year view or if no data
-        if (view === 'year' || item.duration === 0) {
+        // Update cursor if no data
+        if (item.duration === 0) {
           bar.style.cursor = 'default'
         }
 
@@ -2638,7 +2660,13 @@
   }
 
   // on this day section
-  async function createOnThisDaySection(row, scenes, oHistoryCache) {
+  async function createOnThisDaySection(
+    row,
+    scenes,
+    oHistoryCache,
+    options = {},
+  ) {
+    const { hideStats = false, expandedByDefault = false } = options
     // Create main container
     const mainContainer = document.createElement('div')
     mainContainer.style.width = '100%'
@@ -2651,7 +2679,7 @@
     // Track selected day offset (0 = today, -1 = yesterday, etc.)
     let selectedDayOffset = 0
     // Track expanded state
-    let isExpanded = false
+    let isExpanded = expandedByDefault
 
     // Function to render the day
     async function renderDay(dayOffset) {
@@ -3025,8 +3053,9 @@
       videoListTitle.appendChild(expandButton)
 
       const videoList = document.createElement('div')
-      videoList.style.maxHeight = isExpanded ? '800px' : '400px'
-      videoList.style.overflowY = 'auto'
+      // Expanded shows the whole list; collapsed scrolls inside a short box.
+      videoList.style.maxHeight = isExpanded ? 'none' : '400px'
+      videoList.style.overflowY = isExpanded ? 'visible' : 'auto'
       videoList.style.border = '1px solid #555'
       videoList.style.borderRadius = '8px'
       videoList.style.backgroundColor = 'rgba(0,0,0,0.2)'
@@ -3163,6 +3192,7 @@
       summaryContainer.style.padding = '1.5rem'
       summaryContainer.style.borderTop = '2px solid #555'
       summaryContainer.style.marginTop = '1rem'
+      if (hideStats) summaryContainer.style.display = 'none'
       mainContainer.appendChild(summaryContainer)
 
       // Total O's today
@@ -3317,21 +3347,6 @@
     separator.style.borderTop = '2px solid rgba(255, 255, 255, 0.2)'
     el.insertBefore(separator, changelog)
 
-    // Create header container
-    const headerContainer = document.createElement('div')
-    headerContainer.style.marginTop = '2rem'
-    headerContainer.style.marginBottom = '2rem'
-    headerContainer.style.display = 'flex'
-    headerContainer.style.justifyContent = 'center'
-    headerContainer.style.alignItems = 'center'
-    el.insertBefore(headerContainer, changelog)
-
-    const oStatsHeader = document.createElement('h3')
-    oStatsHeader.style.fontSize = '3rem'
-    oStatsHeader.style.margin = '0'
-    oStatsHeader.innerText = ''
-    headerContainer.appendChild(oStatsHeader)
-
     const rowOne = document.createElement('div')
     rowOne.classList = 'custom-stats-row col col-sm-8 m-sm-auto row stats'
     rowOne.style.justifyContent = 'center'
@@ -3366,7 +3381,8 @@
     el.insertBefore(rowSix, changelog)
 
     // Fast path: load lightweight stats data first.
-    const [scenes, watchTimeData] = await Promise.all([
+    const [settings, scenes, watchTimeData] = await Promise.all([
+      getPluginSettings(),
       getScenesWithOHistory(),
       loadWatchTimeData(),
     ])
@@ -3374,25 +3390,95 @@
     // OPTIMIZATION: Pre-process O history for faster lookups
     const oHistoryCache = buildOHistoryDayMap(scenes)
 
+    // Individual stats, skipped when their own setting is on. The whole-row
+    // setting overrides these, so a hidden row never shows any of its stats.
+    const topStats = settings.hideTopStats
+      ? []
+      : [
+          [
+            settings.hideTopStatsOsToday,
+            () => createOrgasmsToday(rowOne, scenes, oHistoryCache),
+          ],
+          [
+            settings.hideTopStatsRecordDay,
+            () => createBestOrgasmDay(rowOne, scenes, oHistoryCache),
+          ],
+          [
+            settings.hideTopStatsStreak,
+            () => createOrgasmStreak(rowOne, scenes, oHistoryCache),
+          ],
+          [
+            settings.hideTopStatsRecordSession,
+            () => createWatchTimeToday(rowOne, watchTimeData),
+          ],
+          [
+            settings.hideTopStatsAverageMinPerO,
+            () =>
+              createAverageOPerMinute(
+                rowOne,
+                scenes,
+                watchTimeData,
+                oHistoryCache,
+              ),
+          ],
+        ].filter(([hidden]) => !hidden)
+
+    const sceneHighlights = settings.hideSceneHighlights
+      ? []
+      : [
+          [
+            settings.hideSceneHighlightsMostOs,
+            () => createMostOScene(rowTwo, scenes),
+          ],
+          [
+            settings.hideSceneHighlightsLongestPlay,
+            () => createLongestWatchedScene(rowTwo, scenes),
+          ],
+          [
+            settings.hideSceneHighlightsMostRecentO,
+            () => createMostRecentOScene(rowTwo, scenes),
+          ],
+          [
+            settings.hideSceneHighlightsOldestO,
+            () => createOldestOScene(rowTwo, scenes),
+          ],
+        ].filter(([hidden]) => !hidden)
+
+    // Hide rows that have nothing to show. The On This Day row always stays
+    // since its padding spaces out the bottom of the page.
+    const hiddenRows = [
+      [rowOne, topStats.length === 0],
+      [rowTwo, sceneHighlights.length === 0],
+      [rowThree, settings.hideOGraph],
+      [rowFour, settings.hideWatchTimeGraph],
+      [rowFive, settings.hideExportImportButtons],
+    ]
+    hiddenRows.forEach(([row, hidden]) => {
+      if (hidden) row.style.display = 'none'
+    })
+
+    // The first visible row gets the same top spacing as the top stats row,
+    // so hiding rows above it doesn't leave a big gap under the separator.
+    const firstVisibleRow = [rowOne, rowTwo, rowThree, rowFour, rowFive, rowSix]
+      .find((row) => row.style.display !== 'none')
+    firstVisibleRow.style.paddingTop = '0'
+    firstVisibleRow.style.marginTop = rowOne.style.marginTop
+
     // OPTIMIZATION: Run all stat calculations in parallel
-    await Promise.all([
-      createOrgasmsToday(rowOne, scenes, oHistoryCache),
-      createBestOrgasmDay(rowOne, scenes, oHistoryCache),
-      createOrgasmStreak(rowOne, scenes, oHistoryCache),
-      createWatchTimeToday(rowOne, watchTimeData),
-      createAverageOPerMinute(rowOne, scenes, watchTimeData, oHistoryCache),
-    ])
+    await Promise.all(topStats.map(([, create]) => create()))
+    await Promise.all(sceneHighlights.map(([, create]) => create()))
 
-    await Promise.all([
-      createMostOScene(rowTwo, scenes),
-      createLongestWatchedScene(rowTwo, scenes),
-      createMostRecentOScene(rowTwo, scenes),
-      createOldestOScene(rowTwo, scenes),
-    ])
+    if (!settings.hideOGraph) {
+      await createWeeklyBarChart(rowThree, scenes, oHistoryCache)
+    }
+    if (!settings.hideWatchTimeGraph) {
+      await createWatchTimeBarChart(rowFour, watchTimeData)
+    }
+    if (!settings.hideExportImportButtons) {
+      createWatchTimeExportButton(rowFive, scenes)
+    }
 
-    await createWeeklyBarChart(rowThree, scenes, oHistoryCache)
-    await createWatchTimeBarChart(rowFour, watchTimeData)
-    createWatchTimeExportButton(rowFive, scenes)
+    if (settings.hideOnThisDay) return
 
     const onThisDayLoading = document.createElement('div')
     onThisDayLoading.style.textAlign = 'center'
@@ -3407,7 +3493,10 @@
       .then(async (fullScenes) => {
         rowSix.innerHTML = ''
         const fullHistoryCache = buildOHistoryDayMap(fullScenes)
-        await createOnThisDaySection(rowSix, fullScenes, fullHistoryCache)
+        await createOnThisDaySection(rowSix, fullScenes, fullHistoryCache, {
+          hideStats: settings.hideOnThisDayStats,
+          expandedByDefault: settings.expandOnThisDayList,
+        })
       })
       .catch((err) => {
         console.error('[OStats] Failed loading On This Day data:', err)
