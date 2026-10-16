@@ -27,70 +27,20 @@
     return result.data
   }
 
-  // ===== DATA CACHE HELPERS =====
-  const SCENES_CORE_CACHE_KEY = 'ostats_scenes_core_v1'
-  const SCENES_FULL_CACHE_KEY = 'ostats_scenes_full_v1'
-  const STATS_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
-  const STATS_USE_CACHE_KEY = 'ostats_use_cache'
-
+  // ===== SCENE DATA HELPERS =====
   const inFlightDataRequests = {
     scenesCore: null,
     scenesFull: null,
   }
 
-  function shouldUseCache() {
-    try {
-      const pref = localStorage.getItem(STATS_USE_CACHE_KEY)
-      return pref === 'true'
-    } catch (e) {
-      return false
-    }
-  }
+  // Remove data left behind by the old "Use cache" option.
+  try {
+    localStorage.removeItem('ostats_scenes_core_v1')
+    localStorage.removeItem('ostats_scenes_full_v1')
+    localStorage.removeItem('ostats_use_cache')
+  } catch (e) {}
 
-  function setShouldUseCache(value) {
-    try {
-      localStorage.setItem(STATS_USE_CACHE_KEY, value ? 'true' : 'false')
-    } catch (e) {
-      console.warn('[OStats] Failed to save cache preference:', e)
-    }
-  }
-
-  function safeReadCache(cacheKey, maxAgeMs = STATS_CACHE_TTL_MS) {
-    if (!shouldUseCache()) return null
-
-    try {
-      const raw = localStorage.getItem(cacheKey)
-      if (!raw) return null
-
-      const parsed = JSON.parse(raw)
-      if (!parsed || !Array.isArray(parsed.data)) return null
-
-      const age = Date.now() - (parsed.savedAt || 0)
-      if (age > maxAgeMs) return null
-
-      return parsed.data
-    } catch (e) {
-      console.warn('[OStats] Failed to read cache:', cacheKey, e)
-      return null
-    }
-  }
-
-  function safeWriteCache(cacheKey, data) {
-    try {
-      localStorage.setItem(
-        cacheKey,
-        JSON.stringify({
-          savedAt: Date.now(),
-          data,
-        }),
-      )
-    } catch (e) {
-      // Large payloads can exceed localStorage quota. This should not block rendering.
-      console.warn('[OStats] Failed to write cache:', cacheKey, e)
-    }
-  }
-
-  function sanitizeSceneForCache(scene, includePlayHistory) {
+  function sanitizeScene(scene, includePlayHistory) {
     return {
       id: scene.id,
       title: scene.title || null,
@@ -129,48 +79,32 @@
 
     const data = await callGQL({ query })
     const scenes = data.findScenes?.scenes || []
-    return scenes.map((scene) =>
-      sanitizeSceneForCache(scene, includePlayHistory),
-    )
+    return scenes.map((scene) => sanitizeScene(scene, includePlayHistory))
   }
 
-  async function getScenesData(includePlayHistory = false, options = {}) {
-    const { forceRefresh = false } = options
-    const cacheKey = includePlayHistory
-      ? SCENES_FULL_CACHE_KEY
-      : SCENES_CORE_CACHE_KEY
+  async function getScenesData(includePlayHistory = false) {
     const inFlightKey = includePlayHistory ? 'scenesFull' : 'scenesCore'
-
-    if (!forceRefresh) {
-      const cached = safeReadCache(cacheKey)
-      if (cached) {
-        return cached
-      }
-    }
 
     if (inFlightDataRequests[inFlightKey]) {
       return inFlightDataRequests[inFlightKey]
     }
 
-    inFlightDataRequests[inFlightKey] = fetchScenesData(includePlayHistory)
-      .then((scenes) => {
-        safeWriteCache(cacheKey, scenes)
-        return scenes
-      })
-      .finally(() => {
-        inFlightDataRequests[inFlightKey] = null
-      })
+    inFlightDataRequests[inFlightKey] = fetchScenesData(
+      includePlayHistory,
+    ).finally(() => {
+      inFlightDataRequests[inFlightKey] = null
+    })
 
     return inFlightDataRequests[inFlightKey]
   }
 
-  async function getScenesWithOHistory(options = {}) {
+  async function getScenesWithOHistory() {
     // Core data for top-level stats does not require play history.
-    return getScenesData(false, options)
+    return getScenesData(false)
   }
 
-  async function getScenesWithPlayHistory(options = {}) {
-    return getScenesData(true, options)
+  async function getScenesWithPlayHistory() {
+    return getScenesData(true)
   }
 
   // Path element listener - waits for specific page elements to load
@@ -682,6 +616,12 @@
 
   // Start tracking watch time for a specific video element.
   function startWatchTimeTracking(videoElement) {
+    // Only count playback in the main scene player, not previews or other
+    // plugins' videos.
+    if (!isOnScenePage() || !isMainScenePlayer(videoElement)) {
+      return
+    }
+
     if (videoElement && activeVideoElements.has(videoElement)) {
       return
     }
@@ -740,10 +680,16 @@
     return /\/scenes\/\d+/.test(window.location.pathname)
   }
 
+  // Check if a video element is Stash's main scene player
+  function isMainScenePlayer(videoElement) {
+    return !!videoElement?.closest('.scene-player-container')
+  }
+
   // Hook into video player events
   function setupVideoPlayerTracking() {
     function attachTrackingToVideo(videoPlayer) {
       if (!videoPlayer || videoPlayer.dataset.ostatsTracking) return
+      if (!isMainScenePlayer(videoPlayer)) return
 
       videoPlayer.dataset.ostatsTracking = 'true'
 
@@ -3467,58 +3413,5 @@
         console.error('[OStats] Failed loading On This Day data:', err)
         onThisDayLoading.innerText = 'Failed to load On This Day data.'
       })
-
-    // Create bottom footer with cache toggle
-    const footerContainer = document.createElement('div')
-    footerContainer.style.marginTop = '4rem'
-    footerContainer.style.marginBottom = '2rem'
-    footerContainer.style.display = 'flex'
-    footerContainer.style.justifyContent = 'center'
-    footerContainer.style.alignItems = 'center'
-    footerContainer.style.gap = '0.5rem'
-    footerContainer.style.fontSize = '0.9rem'
-    el.insertBefore(footerContainer, changelog)
-
-    const cacheCheckbox = document.createElement('input')
-    cacheCheckbox.type = 'checkbox'
-    cacheCheckbox.checked = shouldUseCache()
-    cacheCheckbox.style.cursor = 'pointer'
-    footerContainer.appendChild(cacheCheckbox)
-
-    const cacheLabel = document.createElement('label')
-    cacheLabel.innerText = 'Use cache'
-    cacheLabel.style.cursor = 'pointer'
-    cacheLabel.style.userSelect = 'none'
-    footerContainer.appendChild(cacheLabel)
-
-    const helpIcon = document.createElement('div')
-    helpIcon.innerText = '?'
-    helpIcon.style.width = '18px'
-    helpIcon.style.height = '18px'
-    helpIcon.style.borderRadius = '50%'
-    helpIcon.style.backgroundColor = '#555'
-    helpIcon.style.color = '#ccc'
-    helpIcon.style.display = 'flex'
-    helpIcon.style.alignItems = 'center'
-    helpIcon.style.justifyContent = 'center'
-    helpIcon.style.fontSize = '0.75rem'
-    helpIcon.style.fontWeight = 'bold'
-    helpIcon.style.cursor = 'help'
-    helpIcon.style.transition = 'background-color 0.2s, color 0.2s'
-    helpIcon.title = 'When enabled, stats are cached for 10 minutes to load faster. When disabled, stats always load fresh. Your preference is saved.'
-    helpIcon.addEventListener('mouseenter', () => {
-      helpIcon.style.backgroundColor = '#666'
-      helpIcon.style.color = '#fff'
-    })
-    helpIcon.addEventListener('mouseleave', () => {
-      helpIcon.style.backgroundColor = '#555'
-      helpIcon.style.color = '#ccc'
-    })
-    footerContainer.appendChild(helpIcon)
-
-    // Save preference when checkbox changes
-    cacheCheckbox.addEventListener('change', () => {
-      setShouldUseCache(cacheCheckbox.checked)
-    })
   }
 })()
