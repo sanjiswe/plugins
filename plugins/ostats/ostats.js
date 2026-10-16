@@ -28,11 +28,18 @@
   }
 
   // ===== PLUGIN SETTINGS =====
-  // Settings are defined in ostats.yml and saved by Stash.
+  // Settings are defined in ostats.yml and saved by Stash. Stash lists them
+  // sorted by key, so the keys are numbered (01_hideTopStats) to keep them
+  // in page order; the number is stripped off here.
   async function getPluginSettings() {
     try {
       const data = await callGQL({ query: 'query { configuration { plugins } }' })
-      return data.configuration?.plugins?.ostats || {}
+      const saved = data.configuration?.plugins?.ostats || {}
+      const settings = {}
+      Object.keys(saved).forEach((key) => {
+        settings[key.replace(/^\d+_/, '')] = saved[key]
+      })
+      return settings
     } catch (e) {
       console.warn('[OStats] Failed to load plugin settings:', e)
       return {}
@@ -2666,7 +2673,13 @@
     oHistoryCache,
     options = {},
   ) {
-    const { hideStats = false, expandedByDefault = false } = options
+    const {
+      hideStats = false,
+      expandedByDefault = false,
+      timelineExpandedByDefault = false,
+      hideTimelineOs = false,
+      showTimelineWatches = false,
+    } = options
     // Create main container
     const mainContainer = document.createElement('div')
     mainContainer.style.width = '100%'
@@ -2678,8 +2691,9 @@
 
     // Track selected day offset (0 = today, -1 = yesterday, etc.)
     let selectedDayOffset = 0
-    // Track expanded state
+    // Track expanded state of the video list and timeline
     let isExpanded = expandedByDefault
+    let isTimelineExpanded = timelineExpandedByDefault
 
     // Function to render the day
     async function renderDay(dayOffset) {
@@ -2856,10 +2870,29 @@
       timelineTitle.style.fontSize = '1.1rem'
       timelineContainer.appendChild(timelineTitle)
 
+      // Add timeline expand button
+      const timelineExpandButton = document.createElement('button')
+      timelineExpandButton.innerText = isTimelineExpanded
+        ? 'Collapse ▲'
+        : 'Expand ▼'
+      timelineExpandButton.style.padding = '0.5rem 1rem'
+      timelineExpandButton.style.marginLeft = '1rem'
+      timelineExpandButton.style.cursor = 'pointer'
+      timelineExpandButton.style.border = '1px solid #555'
+      timelineExpandButton.style.backgroundColor = 'transparent'
+      timelineExpandButton.style.color = '#fff'
+      timelineExpandButton.style.borderRadius = '4px'
+      timelineExpandButton.style.fontSize = '0.9rem'
+      timelineExpandButton.addEventListener('click', () => {
+        isTimelineExpanded = !isTimelineExpanded
+        renderDay(selectedDayOffset)
+      })
+      timelineTitle.appendChild(timelineExpandButton)
+
       // Timeline visualization
       const timelineViz = document.createElement('div')
       timelineViz.style.position = 'relative'
-      timelineViz.style.height = '400px'
+      timelineViz.style.height = isTimelineExpanded ? '600px' : '400px'
       timelineViz.style.border = '1px solid #555'
       timelineViz.style.borderRadius = '8px'
       timelineViz.style.padding = '1rem 2rem'
@@ -2928,9 +2961,29 @@
       pmSection.style.pointerEvents = 'none'
       timelineViz.insertBefore(pmSection, centerLine)
 
-      // Draw O markers with improved styling
-      dayOs.forEach((o, index) => {
-        const timePercent = (o.hour * 60 + o.minute) / (24 * 60)
+      // Timeline markers: blue for O's, gray for watches without an O.
+      // Both are sorted together so they alternate sides by time.
+      const timelineEvents = [
+        ...(hideTimelineOs
+          ? []
+          : dayOs.map((o) => ({ time: o.time, scene: o.scene, isO: true }))),
+        ...(showTimelineWatches
+          ? daySceneEvents
+              .filter((event) => !event.hasO)
+              .map((event) => ({
+                time: event.time,
+                scene: event.scene,
+                isO: false,
+              }))
+          : []),
+      ].sort((a, b) => a.time - b.time)
+
+      timelineEvents.forEach((event, index) => {
+        const color = event.isO ? '#007bff' : '#6c757d'
+        const shadowRgb = event.isO ? '0, 123, 255' : '108, 117, 125'
+        const hour = event.time.getHours()
+        const minute = event.time.getMinutes()
+        const timePercent = (hour * 60 + minute) / (24 * 60)
 
         // Connector line from center to marker
         const connector = document.createElement('div')
@@ -2939,12 +2992,12 @@
         connector.style.top = `calc(${timePercent * 100}%)`
         connector.style.width = '30px'
         connector.style.height = '2px'
-        connector.style.backgroundColor = '#007bff'
+        connector.style.backgroundColor = color
         connector.style.transform =
           index % 2 === 0
             ? 'translateY(-50%)'
             : 'translateY(-50%) translateX(-100%)'
-        connector.style.zIndex = '5'
+        connector.style.zIndex = event.isO ? '5' : '4'
         timelineViz.appendChild(connector)
 
         const marker = document.createElement('div')
@@ -2954,25 +3007,25 @@
         marker.style.top = `calc(${timePercent * 100}% - 10px)`
         marker.style.width = '20px'
         marker.style.height = '20px'
-        marker.style.backgroundColor = '#007bff'
+        marker.style.backgroundColor = color
         marker.style.borderRadius = '50%'
         marker.style.border = '3px solid #fff'
         marker.style.cursor = 'pointer'
-        marker.style.zIndex = '10'
-        marker.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.5)'
+        marker.style.zIndex = event.isO ? '10' : '9'
+        marker.style.boxShadow = `0 2px 8px rgba(${shadowRgb}, 0.5)`
         marker.style.transition = 'transform 0.2s, box-shadow 0.2s'
 
         // Format time for tooltip
-        let tooltipHour = o.hour % 12
+        let tooltipHour = hour % 12
         tooltipHour = tooltipHour === 0 ? 12 : tooltipHour
-        const tooltipAmpm = o.hour < 12 ? 'am' : 'pm'
-        const tooltipMinute = o.minute.toString().padStart(2, '0')
+        const tooltipAmpm = hour < 12 ? 'am' : 'pm'
+        const tooltipMinute = minute.toString().padStart(2, '0')
 
         marker.title = `${tooltipHour}:${tooltipMinute}${tooltipAmpm} - ${
-          o.scene.title ||
-          (o.scene.files && o.scene.files[0]?.basename) ||
+          event.scene.title ||
+          (event.scene.files && event.scene.files[0]?.basename) ||
           'Untitled'
-        }`
+        }${event.isO ? '' : ' (watched)'}`
 
         // Create thumbnail preview element
         const thumbnailPreview = document.createElement('div')
@@ -2983,7 +3036,7 @@
         thumbnailPreview.style.display = 'none'
         thumbnailPreview.style.zIndex = '100'
         thumbnailPreview.style.pointerEvents = 'none'
-        thumbnailPreview.style.border = '2px solid #007bff'
+        thumbnailPreview.style.border = `2px solid ${color}`
         thumbnailPreview.style.borderRadius = '4px'
         thumbnailPreview.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.5)'
         thumbnailPreview.style.overflow = 'hidden'
@@ -2998,7 +3051,7 @@
         }
 
         const thumbnailImg = document.createElement('img')
-        thumbnailImg.src = o.scene.paths.screenshot
+        thumbnailImg.src = event.scene.paths.screenshot
         thumbnailImg.style.width = '100%'
         thumbnailImg.style.height = '100%'
         thumbnailImg.style.objectFit = 'cover'
@@ -3008,16 +3061,16 @@
 
         marker.addEventListener('mouseenter', () => {
           marker.style.transform = 'scale(1.3)'
-          marker.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.8)'
+          marker.style.boxShadow = `0 4px 12px rgba(${shadowRgb}, 0.8)`
           thumbnailPreview.style.display = 'block'
         })
         marker.addEventListener('mouseleave', () => {
           marker.style.transform = 'scale(1)'
-          marker.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.5)'
+          marker.style.boxShadow = `0 2px 8px rgba(${shadowRgb}, 0.5)`
           thumbnailPreview.style.display = 'none'
         })
         marker.addEventListener('click', () => {
-          openSceneInNewTab(o.scene.id)
+          openSceneInNewTab(event.scene.id)
         })
 
         timelineViz.appendChild(marker)
@@ -3496,6 +3549,9 @@
         await createOnThisDaySection(rowSix, fullScenes, fullHistoryCache, {
           hideStats: settings.hideOnThisDayStats,
           expandedByDefault: settings.expandOnThisDayList,
+          timelineExpandedByDefault: settings.expandOnThisDayTimeline,
+          hideTimelineOs: settings.hideOnThisDayTimelineOs,
+          showTimelineWatches: settings.showOnThisDayTimelineWatches,
         })
       })
       .catch((err) => {
