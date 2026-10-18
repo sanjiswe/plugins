@@ -66,10 +66,14 @@ settings:
     displayName: Hide Watch Time Graph
     type: BOOLEAN
     description: Hides the watch time bar graph. Default false.
-  14_hideExportImportButtons:
-    displayName: Hide Export/Import Buttons
+  13a_hideOCalendar:
+    displayName: Hide O Calendar
     type: BOOLEAN
-    description: Hides the Export JSON and Import JSON buttons. Default false.
+    description: Hides the O Calendar heatmap under the watch time graph. Default false.
+  13b_hideWatchCalendar:
+    displayName: Hide Watch Calendar
+    type: BOOLEAN
+    description: Hides the Watch Calendar heatmap under the O Calendar. Default false.
   15_hideOnThisDay:
     displayName: Hide On This Day
     type: BOOLEAN
@@ -98,6 +102,10 @@ settings:
     displayName: Show Library Stats
     type: BOOLEAN
     description: Shows the Library section at the bottom of the page (scenes, images, galleries, performers, studios, groups and tags). Default false.
+  22_hideExportImportButtons:
+    displayName: Hide Export/Import Buttons
+    type: BOOLEAN
+    description: Hides the Export JSON and Import JSON buttons at the bottom of the page. Default false.
 
 exec:
   - python
@@ -105,10 +113,10 @@ exec:
 interface: raw
 tasks:
   - name: saveWatchData
-    description: Save watch history to JSON file
+    description: Used by the O Stats page to save watch time while you watch. You don't need to run this yourself.
     defaultArgs:
       mode: save
   - name: loadWatchData
-    description: Load watch history from JSON file
+    description: Used by the O Stats page to load watch time. You don't need to run this yourself.
     defaultArgs:
       mode: load

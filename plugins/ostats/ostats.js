@@ -1112,29 +1112,23 @@
             watchSeconds = dayData.totalTime || 0
           }
 
-          // Get O count for this day
-          const oCount = oHistoryCache.dayTotals[day] || 0
-
-          // Format as "watchTime,oCount"
-          cleanedData[day] = `${watchSeconds},${oCount}`
+          // Watch time and O count for this day
+          cleanedData[day] = {
+            seconds: watchSeconds,
+            o_count: oHistoryCache.dayTotals[day] || 0,
+          }
         })
 
         // Create JSON with metadata
         const exportData = {
-          version: '2.0',
+          version: '3.0',
           exported: new Date().toISOString(),
           data: cleanedData,
           totalDays: Object.keys(cleanedData).length,
-          totalSeconds: Object.values(cleanedData).reduce((sum, dayData) => {
-            // Parse watch time from "watchTime,oCount" format
-            const watchTime =
-              typeof dayData === 'string'
-                ? parseInt(dayData.split(',')[0])
-                : typeof dayData === 'number'
-                  ? dayData
-                  : 0
-            return sum + watchTime
-          }, 0),
+          totalSeconds: Object.values(cleanedData).reduce(
+            (sum, dayData) => sum + dayData.seconds,
+            0,
+          ),
         }
 
         // Create download link
@@ -1216,11 +1210,15 @@
             throw new Error('Invalid file format')
           }
 
-          // Strip O counts from import data (format: "watchTime,oCount")
+          // Keep only the watch time; O counts come from Stash itself.
+          // Reads every export format: { seconds, o_count } (3.0),
+          // "watchTime,oCount" (2.0) and plain numbers (older).
           const cleanedDataToImport = {}
           Object.keys(dataToImport).forEach((day) => {
             const value = dataToImport[day]
-            if (typeof value === 'string' && value.includes(',')) {
+            if (value && typeof value === 'object' && 'seconds' in value) {
+              cleanedDataToImport[day] = Number(value.seconds) || 0
+            } else if (typeof value === 'string' && value.includes(',')) {
               // New format: "watchTime,oCount" - extract just watch time
               cleanedDataToImport[day] = parseInt(value.split(',')[0])
             } else if (typeof value === 'number') {
@@ -1648,6 +1646,355 @@
         'var(--os-amber)',
       )
     }
+  }
+
+  // ===== CALENDARS =====
+  // A calendar year as a grid: one column per week (Monday first), one
+  // square per day, darker for more. Used for O's and for watch time.
+  // Click a day to open it in On This Day.
+  function createCalendarHeatmap(
+    row,
+    { title, accent, dayTotals, formatValue, formatTotal, gapLabel, gapNoun },
+  ) {
+    const activeDayKeys = Object.keys(dayTotals)
+      .filter((day) => dayTotals[day] > 0)
+      .sort()
+    const firstActiveDay = activeDayKeys[0] || null
+
+    const card = createEl('div', 'os-card os-chart os-heatmap')
+    card.style.setProperty('--os-accent', accent)
+    row.appendChild(card)
+
+    const head = createEl('div', 'os-chart-head')
+    const titleWrap = createEl('div')
+    titleWrap.appendChild(createEl('h4', 'os-chart-title', title))
+    const totalEl = createEl('div', 'os-chart-total')
+    titleWrap.appendChild(totalEl)
+    head.appendChild(titleWrap)
+
+    const pager = createEl('div', 'os-pager')
+    const prevBtn = createEl('button', 'os-btn os-btn-icon', '‹')
+    prevBtn.title = 'Previous year'
+    const periodLabel = createEl('span', 'os-pager-label')
+    const nextBtn = createEl('button', 'os-btn os-btn-icon', '›')
+    nextBtn.title = 'Next year'
+    pager.append(prevBtn, periodLabel, nextBtn)
+    head.appendChild(pager)
+    card.appendChild(head)
+
+    // The grid scrolls sideways on narrow screens instead of shrinking
+    const scroller = createEl('div', 'os-heatmap-scroll')
+    card.appendChild(scroller)
+
+    const foot = createEl('div', 'os-heatmap-foot')
+    card.appendChild(foot)
+
+    // The year shown; starts on the current year
+    let year = new Date().getFullYear()
+    const firstYear = firstActiveDay
+      ? parseLocalDate(firstActiveDay).getFullYear()
+      : year
+
+    prevBtn.addEventListener('click', () => {
+      if (year > firstYear) {
+        year--
+        render()
+      }
+    })
+    nextBtn.addEventListener('click', () => {
+      if (year < new Date().getFullYear()) {
+        year++
+        render()
+      }
+    })
+
+    // Shade 0-4: nothing, then four steps relative to the busiest day
+    function getLevel(value, maxValue) {
+      if (value <= 0) return 0
+      return Math.min(4, Math.ceil((value / maxValue) * 4))
+    }
+
+    function formatDayLong(date) {
+      return date.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    }
+
+    function plural(n, word) {
+      return `${n} ${word}${n === 1 ? '' : 's'}`
+    }
+
+    const dayMs = 1000 * 60 * 60 * 24
+    const daysBetween = (a, b) =>
+      Math.round((parseLocalDate(b) - parseLocalDate(a)) / dayMs)
+
+    // Longest run of days with nothing, all time. Counting starts at the
+    // first active day ever, so the days before it don't count. The run that
+    // is still going (since the last active day) counts up to and including
+    // today.
+    function getLongestGap(todayStr) {
+      if (!firstActiveDay) return null
+
+      let longest = { days: 0, from: null, to: null }
+      for (let i = 1; i < activeDayKeys.length; i++) {
+        const gap = daysBetween(activeDayKeys[i - 1], activeDayKeys[i]) - 1
+        if (gap > longest.days) {
+          longest = {
+            days: gap,
+            from: activeDayKeys[i - 1],
+            to: activeDayKeys[i],
+          }
+        }
+      }
+
+      const lastActiveDay = activeDayKeys[activeDayKeys.length - 1]
+      const sinceLast = daysBetween(lastActiveDay, todayStr)
+      if (lastActiveDay !== todayStr && sinceLast > longest.days) {
+        longest = { days: sinceLast, from: lastActiveDay, to: null }
+      }
+      return longest
+    }
+
+    function render() {
+      const now = new Date()
+      const todayStr = getLocalDateString(now)
+      const thisYear = now.getFullYear()
+
+      // Monday on or before Jan 1 through the Sunday on or after Dec 31
+      const jan1 = new Date(year, 0, 1)
+      const start = new Date(jan1)
+      start.setDate(1 - ((jan1.getDay() + 6) % 7))
+      const dec31 = new Date(year, 11, 31)
+      const end = new Date(dec31)
+      end.setDate(31 + ((7 - dec31.getDay()) % 7))
+      const weeks = Math.round((end - start) / (dayMs * 7)) + 1
+
+      const days = []
+      for (let i = 0; i < weeks * 7; i++) {
+        const date = new Date(start)
+        date.setDate(start.getDate() + i)
+        const key = getLocalDateString(date)
+        days.push({
+          date,
+          key,
+          value: dayTotals[key] || 0,
+          isOutside: date.getFullYear() !== year,
+          isFuture: key > todayStr,
+          isToday: key === todayStr,
+        })
+      }
+
+      periodLabel.innerText = String(year)
+      prevBtn.disabled = year <= firstYear
+      nextBtn.disabled = year >= thisYear
+
+      const yearDays = days.filter((day) => !day.isOutside && !day.isFuture)
+      const total = yearDays.reduce((sum, day) => sum + day.value, 0)
+      const activeDays = yearDays.filter((day) => day.value > 0).length
+      totalEl.innerHTML = ''
+      totalEl.append(
+        createEl('strong', '', formatTotal(total)),
+        ` on ${plural(activeDays, 'day')} in ${year}`,
+      )
+
+      const maxValue = Math.max(1, ...yearDays.map((day) => day.value))
+
+      // Grid: weekday labels, month labels across the top, then the days
+      scroller.innerHTML = ''
+      const grid = createEl('div', 'os-heatmap-grid')
+      grid.style.setProperty('--os-weeks', weeks)
+      scroller.appendChild(grid)
+
+      ;['Mon', '', 'Wed', '', 'Fri', '', 'Sun'].forEach((label, i) => {
+        const weekday = createEl('div', 'os-heatmap-weekday', label)
+        weekday.style.gridRow = String(i + 2)
+        grid.appendChild(weekday)
+      })
+
+      // Label the column holding the 1st of each month
+      for (let month = 0; month < 12; month++) {
+        const first = new Date(year, month, 1)
+        const week = Math.floor(Math.round((first - start) / dayMs) / 7)
+        const monthLabel = createEl(
+          'div',
+          'os-heatmap-month',
+          first.toLocaleDateString('en-US', { month: 'short' }),
+        )
+        monthLabel.style.gridColumn = String(week + 2)
+        grid.appendChild(monthLabel)
+      }
+
+      let todayCell = null
+      days.forEach((day, i) => {
+        const cell = createEl('div', 'os-heatmap-cell')
+        cell.style.gridColumn = String(Math.floor(i / 7) + 2)
+        cell.style.gridRow = String((i % 7) + 2)
+        if (day.isOutside) {
+          // Days from the neighbouring years in the first and last week
+          cell.classList.add('is-outside')
+        } else if (day.isFuture) {
+          // Rest of the year still shows, as empty days
+          cell.classList.add('is-future')
+          cell.dataset.level = '0'
+          cell.title = formatDayLong(day.date)
+        } else {
+          cell.dataset.level = String(getLevel(day.value, maxValue))
+          cell.title = `${formatDayLong(day.date)}: ${formatValue(day.value)}`
+          cell.addEventListener('click', () => openDayInOnThisDay(day.key))
+        }
+        if (day.isToday) {
+          cell.classList.add('is-today')
+          todayCell = cell
+        }
+        grid.appendChild(cell)
+      })
+
+      // On narrow screens, start with today in view (or January for
+      // past years)
+      scroller.scrollLeft = todayCell
+        ? todayCell.offsetLeft - scroller.clientWidth / 2
+        : 0
+
+      // Footer: highlights for the year, the all-time longest gap and the
+      // legend
+      foot.innerHTML = ''
+      const facts = createEl('div', 'os-heatmap-facts')
+      foot.appendChild(facts)
+
+      function addFact(label, value, links = []) {
+        const fact = createEl('span', 'os-heatmap-fact')
+        fact.appendChild(createEl('span', '', `${label} `))
+        fact.appendChild(createEl('strong', '', value))
+        links.forEach(([text, dayKey]) => {
+          fact.append(text)
+          if (!dayKey) return
+          const link = createEl('span', 'os-day-link', formatShortDate(dayKey))
+          link.title = 'Open in On This Day'
+          link.addEventListener('click', () => openDayInOnThisDay(dayKey))
+          fact.appendChild(link)
+        })
+        facts.appendChild(fact)
+        return fact
+      }
+
+      if (total > 0) {
+        // Best day (earliest if tied)
+        let best = yearDays[0]
+        yearDays.forEach((day) => {
+          if (day.value > best.value) best = day
+        })
+        addFact('Best day', formatValue(best.value), [[' on ', best.key]])
+
+        // Longest run of active days in a row, with its first and last day
+        let longest = { days: 0, from: null, to: null }
+        let runStart = null
+        yearDays.forEach((day, i) => {
+          if (day.value > 0) {
+            if (runStart === null) runStart = i
+            const length = i - runStart + 1
+            if (length > longest.days) {
+              longest = {
+                days: length,
+                from: yearDays[runStart].key,
+                to: day.key,
+              }
+            }
+          } else {
+            runStart = null
+          }
+        })
+        addFact(
+          'Longest streak',
+          plural(longest.days, 'day'),
+          longest.days > 1
+            ? longest.to === todayStr
+              ? [[' since ', longest.from], [' (still going)', null]]
+              : [
+                  [' between ', longest.from],
+                  [' and ', longest.to],
+                ]
+            : [[' on ', longest.from]],
+        )
+
+        // Weekday with the most
+        const byWeekday = new Array(7).fill(0)
+        yearDays.forEach((day) => {
+          byWeekday[(day.date.getDay() + 6) % 7] += day.value
+        })
+        const busiest = byWeekday.indexOf(Math.max(...byWeekday))
+        addFact(
+          'Busiest weekday',
+          ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'][busiest],
+        )
+      } else {
+        facts.appendChild(
+          createEl('span', 'os-heatmap-fact', `Nothing in ${year}`),
+        )
+      }
+
+      // All time, so it is the same whichever year is shown
+      const gap = getLongestGap(todayStr)
+      if (gap && gap.days > 0) {
+        const fact = addFact(
+          gapLabel,
+          plural(gap.days, 'day'),
+          gap.to
+            ? [
+                [' between ', gap.from],
+                [' and ', gap.to],
+              ]
+            : [[' since ', gap.from], [' (still going)', null]],
+        )
+        fact.title = `All time, counted from your first logged ${gapNoun} on ${formatShortDate(firstActiveDay)}`
+      }
+
+      const legend = createEl('div', 'os-heatmap-legend')
+      legend.appendChild(createEl('span', '', 'Less'))
+      for (let level = 0; level <= 4; level++) {
+        const swatch = createEl('i', 'os-heatmap-cell')
+        swatch.dataset.level = String(level)
+        legend.appendChild(swatch)
+      }
+      legend.appendChild(createEl('span', '', 'More'))
+      foot.appendChild(legend)
+    }
+
+    render()
+  }
+
+  // O's per day
+  function createOHeatmap(row, oHistoryCache) {
+    const plural = (n) => `${n} O${n === 1 ? '' : "'s"}`
+    createCalendarHeatmap(row, {
+      title: 'O Calendar',
+      accent: 'var(--os-blue)',
+      dayTotals: oHistoryCache.dayTotals,
+      formatValue: plural,
+      formatTotal: plural,
+      gapLabel: 'Longest no-fap streak',
+      gapNoun: 'O',
+    })
+  }
+
+  // Watch time per day
+  function createWatchHeatmap(row, watchTimeData) {
+    const dayTotals = {}
+    Object.keys(watchTimeData).forEach((day) => {
+      dayTotals[day] = getWatchSeconds(watchTimeData[day])
+    })
+    createCalendarHeatmap(row, {
+      title: 'Watch Calendar',
+      accent: 'var(--os-green)',
+      dayTotals,
+      formatValue: (seconds) =>
+        seconds > 0 ? `${formatDuration(seconds)} watched` : 'Nothing watched',
+      formatTotal: (total) => `${formatDuration(total)} watched`,
+      gapLabel: 'Longest break',
+      gapNoun: 'watch',
+    })
   }
 
   // Stash's own numbers from its Stats page, shown in O Stats' All Time
@@ -2173,8 +2520,17 @@
       const pager = createEl('div', 'os-pager')
       const prevDayBtn = createEl('button', 'os-btn os-btn-icon', '‹')
       prevDayBtn.title = 'Previous day'
-      const todayBtn = createEl('button', 'os-btn', 'Today')
-      todayBtn.disabled = isToday
+      // Shows the day being viewed; click to jump back to today
+      const todayBtn = createEl(
+        'button',
+        'os-btn',
+        targetDate.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }),
+      )
+      todayBtn.title = isToday ? 'Showing today' : 'Back to today'
       const nextDayBtn = createEl('button', 'os-btn os-btn-icon', '›')
       nextDayBtn.title = 'Next day'
       nextDayBtn.disabled = dayOffset >= 0
@@ -2679,7 +3035,8 @@
     const showCharts =
       !settings.hideOGraph ||
       !settings.hideWatchTimeGraph ||
-      !settings.hideExportImportButtons
+      !settings.hideOCalendar ||
+      !settings.hideWatchCalendar
     if (showCharts) {
       const section = createSection(root, 'Activity')
       if (!settings.hideOGraph) {
@@ -2688,8 +3045,11 @@
       if (!settings.hideWatchTimeGraph) {
         await createWatchTimeBarChart(section, watchTimeData)
       }
-      if (!settings.hideExportImportButtons) {
-        createWatchTimeExportButton(section, scenes)
+      if (!settings.hideOCalendar) {
+        createOHeatmap(section, oHistoryCache)
+      }
+      if (!settings.hideWatchCalendar) {
+        createWatchHeatmap(section, watchTimeData)
       }
     }
 
@@ -2709,6 +3069,10 @@
       const grid = createEl('div', 'os-grid os-grid-compact')
       section.appendChild(grid)
       createLibraryStats(grid, libraryStats)
+    }
+
+    if (!settings.hideExportImportButtons) {
+      createWatchTimeExportButton(root, scenes)
     }
 
     if (!onThisDaySection) return

@@ -355,19 +355,6 @@ a.os-stat:hover {
   font-size: 1rem;
 }
 
-.os-help {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--os-muted);
-  border: 1px solid var(--os-border-strong);
-  cursor: help;
-}
-
 .os-segmented {
   display: inline-flex;
   padding: 3px;
@@ -411,6 +398,27 @@ a.os-stat:hover {
   text-align: center;
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+.os-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.os-help {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--os-muted);
+  border: 1px solid var(--os-border-strong);
+  cursor: help;
 }
 
 /* ===== Charts ===== */
@@ -558,12 +566,135 @@ a.os-stat:hover {
   visibility: hidden;
 }
 
-.os-toolbar {
+/* ===== O Calendar ===== */
+.os-heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.os-heatmap-grid {
+  display: grid;
+  grid-template-columns: 2rem repeat(var(--os-weeks), minmax(10px, 1fr));
+  grid-template-rows: 1.1rem repeat(7, auto);
+  gap: 3px;
+  min-width: 640px;
+}
+
+.os-heatmap-weekday {
+  grid-column: 1;
+  font-size: 0.68rem;
+  color: var(--os-faint);
+  align-self: center;
+  line-height: 1;
+}
+
+.os-heatmap-month {
+  grid-row: 1;
+  font-size: 0.7rem;
+  color: var(--os-muted);
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.os-heatmap-cell {
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: outline-color 0.1s;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+
+.os-heatmap-cell:hover {
+  outline-color: rgba(255, 255, 255, 0.6);
+}
+
+.os-heatmap-cell[data-level='1'] {
+  background: color-mix(in srgb, var(--os-accent) 30%, transparent);
+}
+
+.os-heatmap-cell[data-level='2'] {
+  background: color-mix(in srgb, var(--os-accent) 52%, transparent);
+}
+
+.os-heatmap-cell[data-level='3'] {
+  background: color-mix(in srgb, var(--os-accent) 76%, transparent);
+}
+
+.os-heatmap-cell[data-level='4'] {
+  background: var(--os-accent);
+}
+
+/* Rest of the current year: empty days, a little fainter */
+.os-heatmap-cell.is-future {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Days from the neighbouring years in the first and last week */
+.os-heatmap-cell.is-outside {
+  background: transparent;
+  cursor: default;
+}
+
+.os-heatmap-cell.is-future:hover,
+.os-heatmap-cell.is-outside:hover {
+  outline-color: transparent;
+}
+
+.os-heatmap-cell.is-today {
+  outline-color: var(--os-text);
+}
+
+.os-heatmap-foot {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
   flex-wrap: wrap;
+  margin-top: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--os-muted);
+}
+
+.os-heatmap-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+}
+
+.os-heatmap-fact strong {
+  color: var(--os-text);
+}
+
+.os-heatmap-fact[title] {
+  cursor: help;
+}
+
+.os-heatmap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.os-heatmap-legend .os-heatmap-cell {
+  width: 12px;
+  cursor: default;
+}
+
+.os-heatmap-legend .os-heatmap-cell:hover {
+  outline-color: transparent;
+}
+
+.os-heatmap-legend span:first-child {
+  margin-right: 2px;
+}
+
+.os-heatmap-legend span:last-child {
+  margin-left: 2px;
 }
 
 /* ===== On This Day ===== */
