@@ -66,6 +66,7 @@
       o_counter: scene.o_counter || 0,
       o_history: Array.isArray(scene.o_history) ? scene.o_history : [],
       play_duration: scene.play_duration || 0,
+      last_played_at: scene.last_played_at || null,
       play_history:
         includePlayHistory && Array.isArray(scene.play_history)
           ? scene.play_history
@@ -85,6 +86,7 @@
           o_counter
           o_history
           play_duration
+          last_played_at
           ${playHistoryField}
           files {
             basename
@@ -1057,6 +1059,41 @@
     })
   }
 
+  // watch time today
+  function createWatchTimeTodayStat(row, watchTimeData) {
+    const seconds = getWatchSeconds(watchTimeData[getTodayDate()])
+    createStatCard(row, {
+      icon: '📺',
+      value: formatDuration(seconds),
+      label: 'Watch Time Today',
+      accent: 'var(--os-green)',
+    })
+  }
+
+  // videos watched today: scenes played today or with an O today, counted
+  // once each (the same count as On This Day)
+  function createVideosWatchedToday(row, scenes, oHistoryCache) {
+    const today = getTodayDate()
+    const sceneIds = new Set()
+    scenes.forEach((scene) => {
+      if (
+        scene.last_played_at &&
+        getLocalDateString(new Date(scene.last_played_at)) === today
+      ) {
+        sceneIds.add(scene.id)
+      }
+    })
+    ;(oHistoryCache.dayMap.get(today) || []).forEach((event) => {
+      sceneIds.add(event.scene.id)
+    })
+    createStatCard(row, {
+      icon: '🎞️',
+      value: sceneIds.size,
+      label: 'Videos Watched Today',
+      accent: 'var(--os-amber)',
+    })
+  }
+
   // record session - day with longest watch time
   async function createWatchTimeToday(row, watchTimeData) {
     let maxDuration = 0
@@ -1074,7 +1111,7 @@
     const subEl = createStatCard(row, {
       icon: '⌛',
       value: formatDuration(maxDuration),
-      label: 'Record Session',
+      label: 'Most Time Spent in One Day',
       accent: 'var(--os-green)',
     })
     if (maxDay && maxDuration > 0) {
@@ -1298,7 +1335,7 @@
     const subEl = createStatCard(row, {
       icon: '☔',
       value: maxCount,
-      label: 'Record Day',
+      label: "Most O's in One Day",
       accent: 'var(--os-purple)',
     })
     if (bestDay) {
@@ -1426,17 +1463,35 @@
       }
       tooltip = `Highest Streak: ${highestStreak} days\n${formatDate(highestStreakStart)}\nto\n${formatDate(highestStreakEnd)}`
     }
-    createStatCard(row, {
+    const subEl = createStatCard(row, {
       icon: streakIcon,
       value: displayStreak,
       label: streakHeading,
-      sub:
-        highestStreak > 0
-          ? `Best: ${highestStreak} day${highestStreak === 1 ? '' : 's'}`
-          : '',
       accent: 'var(--os-orange)',
       tooltip,
     })
+
+    // Best streak with its first and last day; the dates open On This Day
+    if (highestStreak > 0 && highestStreakStart && highestStreakEnd) {
+      setSubWithDayLink(
+        subEl,
+        `Best: ${highestStreak} day${highestStreak === 1 ? '' : 's'},`,
+        highestStreakStart,
+      )
+      if (highestStreakEnd !== highestStreakStart) {
+        subEl.append(' – ')
+        const endLink = createEl(
+          'span',
+          'os-day-link',
+          formatShortDate(highestStreakEnd),
+        )
+        endLink.title = 'Open in On This Day'
+        endLink.addEventListener('click', () =>
+          openDayInOnThisDay(highestStreakEnd),
+        )
+        subEl.appendChild(endLink)
+      }
+    }
   }
 
   // average O per minute of watch time (overall)
@@ -1654,7 +1709,16 @@
   // Click a day to open it in On This Day.
   function createCalendarHeatmap(
     row,
-    { title, accent, dayTotals, formatValue, formatTotal, gapLabel, gapNoun },
+    {
+      title,
+      accent,
+      dayTotals,
+      formatValue,
+      formatTotal,
+      streakLabel,
+      gapLabel,
+      gapNoun,
+    },
   ) {
     const activeDayKeys = Object.keys(dayTotals)
       .filter((day) => dayTotals[day] > 0)
@@ -1907,7 +1971,7 @@
           }
         })
         addFact(
-          'Longest streak',
+          streakLabel,
           plural(longest.days, 'day'),
           longest.days > 1
             ? longest.to === todayStr
@@ -1963,6 +2027,7 @@
       dayTotals: oHistoryCache.dayTotals,
       formatValue: plural,
       formatTotal: plural,
+      streakLabel: 'Longest O streak',
       gapLabel: 'Longest no-fap streak',
       gapNoun: 'O',
     })
@@ -1981,6 +2046,7 @@
       formatValue: (seconds) =>
         seconds > 0 ? `${formatDuration(seconds)} watched` : 'Nothing watched',
       formatTotal: (total) => `${formatDuration(total)} watched`,
+      streakLabel: 'Longest watch streak',
       gapLabel: 'Longest break',
       gapNoun: 'watch',
     })
@@ -2029,13 +2095,6 @@
       value: formatNumber(stats.total_play_count),
       label: 'Total Plays',
       accent: 'var(--os-amber)',
-    })
-    createStatCard(grid, {
-      icon: '🎬',
-      value: formatNumber(stats.scenes_played),
-      label: 'Scenes Played',
-      sub: `of ${formatNumber(stats.scene_count)} scenes`,
-      accent: 'var(--os-purple)',
     })
     createStatCard(grid, {
       icon: '🕒',
@@ -2949,7 +3008,7 @@
 
     // Individual stats, skipped when their own setting is on. The whole-row
     // setting overrides these, so a hidden row never shows any of its stats.
-    const topStats = settings.hideTopStats
+    const todayStats = settings.hideTopStats
       ? []
       : [
           [
@@ -2957,12 +3016,25 @@
             (row) => createOrgasmsToday(row, scenes, oHistoryCache),
           ],
           [
-            settings.hideTopStatsRecordDay,
-            (row) => createBestOrgasmDay(row, scenes, oHistoryCache),
-          ],
-          [
             settings.hideTopStatsStreak,
             (row) => createOrgasmStreak(row, scenes, oHistoryCache),
+          ],
+          [
+            settings.hideTodayWatchTime,
+            (row) => createWatchTimeTodayStat(row, watchTimeData),
+          ],
+          [
+            settings.hideTodayVideosWatched,
+            (row) => createVideosWatchedToday(row, scenes, oHistoryCache),
+          ],
+        ].filter(([hidden]) => !hidden)
+
+    const allTimeRecords = settings.hideAllTimeStats
+      ? []
+      : [
+          [
+            settings.hideTopStatsRecordDay,
+            (row) => createBestOrgasmDay(row, scenes, oHistoryCache),
           ],
           [
             settings.hideTopStatsRecordSession,
@@ -2998,18 +3070,23 @@
 
     // Sections are added in page order. A hidden section is never created,
     // so the spacing between the ones that are left stays even.
-    if (topStats.length > 0) {
-      const section = createSection(root, 'Today & Records')
+    if (todayStats.length > 0) {
+      const section = createSection(root, 'Today')
       const grid = createEl('div', 'os-grid')
       section.appendChild(grid)
-      await Promise.all(topStats.map(([, create]) => create(grid)))
+      for (const [, create] of todayStats) await create(grid)
     }
 
-    if (!settings.hideAllTimeStats && libraryStats) {
-      const section = createSection(root, 'All Time')
-      const grid = createEl('div', 'os-grid')
+    // Stash's totals, then the records
+    if (
+      !settings.hideAllTimeStats &&
+      (libraryStats || allTimeRecords.length > 0)
+    ) {
+      const section = createSection(root, 'All Time & Records')
+      const grid = createEl('div', 'os-grid os-grid-row')
       section.appendChild(grid)
-      createAllTimeStats(grid, libraryStats)
+      if (libraryStats) createAllTimeStats(grid, libraryStats)
+      for (const [, create] of allTimeRecords) await create(grid)
     }
 
     if (sceneHighlights.length > 0) {

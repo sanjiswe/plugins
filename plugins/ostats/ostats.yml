@@ -11,33 +11,41 @@ ui:
     /: .
 settings:
   01_hideTopStats:
-    displayName: Hide Top Stats
+    displayName: "Hide Today Stats"
     type: BOOLEAN
-    description: Hides the whole top row of stats (O's today, record day, streak, record session and average min/O). Default false.
+    description: Hides the whole Today row (O's today, streak, watch time today and videos watched today). Default false.
   02_hideTopStatsOsToday:
-    displayName: "[Top Stats Row] Hide O's Today"
+    displayName: "[Today] Hide O's Today"
     type: BOOLEAN
-    description: Hides the O's Today stat. Has no effect if Hide Top Stats is on. Default false.
-  03_hideTopStatsRecordDay:
-    displayName: '[Top Stats Row] Hide Record Day'
-    type: BOOLEAN
-    description: Hides the Record Day stat (most O's in a single day). Has no effect if Hide Top Stats is on. Default false.
+    description: Hides the O's Today stat. Has no effect if Hide Today Stats is on. Default false.
   04_hideTopStatsStreak:
-    displayName: '[Top Stats Row] Hide Streak'
+    displayName: "[Today] Hide Streak"
     type: BOOLEAN
-    description: Hides the Streak stat. Has no effect if Hide Top Stats is on. Default false.
-  05_hideTopStatsRecordSession:
-    displayName: '[Top Stats Row] Hide Record Session'
+    description: Hides the Streak stat. Has no effect if Hide Today Stats is on. Default false.
+  04a_hideTodayWatchTime:
+    displayName: "[Today] Hide Watch Time Today"
     type: BOOLEAN
-    description: Hides the Record Session stat (most watch time in a single day). Has no effect if Hide Top Stats is on. Default false.
-  06_hideTopStatsAverageMinPerO:
-    displayName: '[Top Stats Row] Hide Average min/O'
+    description: Hides the Watch Time Today stat. Has no effect if Hide Today Stats is on. Default false.
+  04b_hideTodayVideosWatched:
+    displayName: "[Today] Hide Videos Watched Today"
     type: BOOLEAN
-    description: Hides the Average min/O stat. Has no effect if Hide Top Stats is on. Default false.
+    description: Hides the Videos Watched Today stat. Has no effect if Hide Today Stats is on. Default false.
   06a_hideAllTimeStats:
-    displayName: Hide All Time Stats
+    displayName: "Hide All Time & Records"
     type: BOOLEAN
-    description: Hides the All Time row (total O's, total plays, scenes played and total play duration). Default false.
+    description: Hides the whole All Time & Records row (total O's, total plays, total play duration, most O's in one day, most time spent in one day and average min/O). Default false.
+  06b_hideTopStatsRecordDay:
+    displayName: "[All Time & Records] Hide Most O's in One Day"
+    type: BOOLEAN
+    description: Hides the Most O's in One Day stat. Has no effect if Hide All Time & Records is on. Default false.
+  06c_hideTopStatsRecordSession:
+    displayName: "[All Time & Records] Hide Most Time Spent in One Day"
+    type: BOOLEAN
+    description: Hides the Most Time Spent in One Day stat (most watch time in a single day). Has no effect if Hide All Time & Records is on. Default false.
+  06d_hideTopStatsAverageMinPerO:
+    displayName: "[All Time & Records] Hide Average min/O"
+    type: BOOLEAN
+    description: Hides the Average min/O stat. Has no effect if Hide All Time & Records is on. Default false.
   07_hideSceneHighlights:
     displayName: Hide Scene Highlights
     type: BOOLEAN

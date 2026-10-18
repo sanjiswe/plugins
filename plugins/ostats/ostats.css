@@ -125,7 +125,7 @@
 .os-grid {
   display: grid;
   gap: 0.9rem;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
 }
 
 .os-grid-compact {
@@ -208,9 +208,7 @@ a.os-stat:hover {
   font-size: 0.8rem;
   color: var(--os-faint);
   margin-top: 0.15rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.4;
 }
 
 .os-day-link {
@@ -223,6 +221,19 @@ a.os-stat:hover {
 .os-day-link:hover {
   color: var(--os-text);
   text-decoration: underline;
+}
+
+/* Six smaller cards that fit on one row on desktop */
+.os-grid-row {
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+}
+
+.os-grid-row .os-stat {
+  padding: 0.95rem 0.95rem 0.9rem;
+}
+
+.os-grid-row .os-stat-value {
+  font-size: 1.5rem;
 }
 
 /* ===== Scene highlights ===== */
