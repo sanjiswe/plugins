@@ -1918,17 +1918,6 @@
                 ]
             : [[' on ', longest.from]],
         )
-
-        // Weekday with the most
-        const byWeekday = new Array(7).fill(0)
-        yearDays.forEach((day) => {
-          byWeekday[(day.date.getDay() + 6) % 7] += day.value
-        })
-        const busiest = byWeekday.indexOf(Math.max(...byWeekday))
-        addFact(
-          'Busiest weekday',
-          ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'][busiest],
-        )
       } else {
         facts.appendChild(
           createEl('span', 'os-heatmap-fact', `Nothing in ${year}`),
