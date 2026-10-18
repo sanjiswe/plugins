@@ -1,8 +1,10 @@
 name: O Stats
 description: Adds O stats to the stats page
-version: 1.1
+version: 2.0
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
+  css:
+    - ostats.css
   javascript:
     - ostats.js
   assets:
@@ -32,6 +34,10 @@ settings:
     displayName: '[Top Stats Row] Hide Average min/O'
     type: BOOLEAN
     description: Hides the Average min/O stat. Has no effect if Hide Top Stats is on. Default false.
+  06a_hideAllTimeStats:
+    displayName: Hide All Time Stats
+    type: BOOLEAN
+    description: Hides the All Time row (total O's, total plays, scenes played and total play duration). Default false.
   07_hideSceneHighlights:
     displayName: Hide Scene Highlights
     type: BOOLEAN
@@ -73,21 +79,25 @@ settings:
     type: BOOLEAN
     description: Hides the blue O markers on the On This Day timeline. Default false.
   17_showOnThisDayTimelineWatches:
-    displayName: "[On This Day] Show Watches On Timeline"
+    displayName: '[On This Day] Show Watches On Timeline'
     type: BOOLEAN
     description: Shows gray markers on the On This Day timeline for videos you watched without an O. Hover to see the thumbnail, click to open the scene. Default false.
   18_expandOnThisDayTimeline:
-    displayName: "[On This Day] Expand Timeline"
+    displayName: '[On This Day] Expand Timeline'
     type: BOOLEAN
     description: Shows the On This Day timeline taller by default so markers close together are easier to tell apart. You can still collapse it with the button. Default false.
   19_expandOnThisDayList:
-    displayName: "[On This Day] Expand Videos Watched List"
+    displayName: '[On This Day] Expand Videos Watched List'
     type: BOOLEAN
     description: Shows the full Videos Watched list in the On This Day section by default instead of a shorter scrolling list. You can still collapse it with the button. Default false.
   20_hideOnThisDayStats:
-    displayName: "[On This Day] Hide Stats"
+    displayName: '[On This Day] Hide Stats'
     type: BOOLEAN
     description: Hides the stats at the bottom of the On This Day section (O's, watch time, videos watched and average min/O). Default false.
+  21_showLibraryStats:
+    displayName: Show Library Stats
+    type: BOOLEAN
+    description: Shows the Library section at the bottom of the page (scenes, images, galleries, performers, studios, groups and tags). Default false.
 
 exec:
   - python
