@@ -1,5 +1,18 @@
 ;(function () {
-  // ===== UTILITY FUNCTIONS (Replaces CommunityScriptsUILibrary dependency) =====
+  // ===== UTILITY FUNCTIONS =====
+
+  // Extra console output for troubleshooting; turn on by running
+  // localStorage.setItem('ostats_debug', '1') in the browser console
+  const DEBUG = (() => {
+    try {
+      return localStorage.getItem('ostats_debug') === '1'
+    } catch (e) {
+      return false
+    }
+  })()
+  function debugLog(...args) {
+    if (DEBUG) console.log('[OStats]', ...args)
+  }
 
   // GraphQL API call function
   async function callGQL(options) {
@@ -46,20 +59,30 @@
     }
   }
 
-  // ===== SCENE DATA HELPERS =====
-  const inFlightDataRequests = {
-    scenesCore: null,
-    scenesFull: null,
-  }
+  // ===== SCENE DATA =====
+  // Only scenes with an O or some play time matter to the stats, so the
+  // rest of the library isn't downloaded.
+  const ACTIVE_SCENES_FILTER = `{
+    o_counter: { value: 0, modifier: GREATER_THAN }
+    OR: {
+      play_count: { value: 0, modifier: GREATER_THAN }
+      OR: { play_duration: { value: 0, modifier: GREATER_THAN } }
+    }
+  }`
 
-  // Remove data left behind by the old "Use cache" option.
+  // Remove data left behind by the old "Use cache" option and the old
+  // cross-tab watch time syncing.
   try {
-    localStorage.removeItem('ostats_scenes_core_v1')
-    localStorage.removeItem('ostats_scenes_full_v1')
-    localStorage.removeItem('ostats_use_cache')
+    ;[
+      'ostats_scenes_core_v1',
+      'ostats_scenes_full_v1',
+      'ostats_use_cache',
+      'ostats_watch_data_sync',
+      'ostats_save_lock',
+    ].forEach((key) => localStorage.removeItem(key))
   } catch (e) {}
 
-  function sanitizeScene(scene, includePlayHistory) {
+  function sanitizeScene(scene) {
     return {
       id: scene.id,
       title: scene.title || null,
@@ -67,779 +90,228 @@
       o_history: Array.isArray(scene.o_history) ? scene.o_history : [],
       play_duration: scene.play_duration || 0,
       last_played_at: scene.last_played_at || null,
-      play_history:
-        includePlayHistory && Array.isArray(scene.play_history)
-          ? scene.play_history
-          : [],
+      play_history: [],
       files: [{ basename: scene.files?.[0]?.basename || '' }],
       paths: { screenshot: scene.paths?.screenshot || '' },
     }
   }
 
-  async function fetchScenesData(includePlayHistory) {
-    const playHistoryField = includePlayHistory ? 'play_history' : ''
-    const query = `query {
-      findScenes(scene_filter: {}, filter: { per_page: -1 }) {
-        scenes {
-          id
-          title
-          o_counter
-          o_history
-          play_duration
-          last_played_at
-          ${playHistoryField}
-          files {
-            basename
-          }
-          paths {
-            screenshot
-          }
-        }
-      }
-    }`
-
-    const data = await callGQL({ query })
-    const scenes = data.findScenes?.scenes || []
-    return scenes.map((scene) => sanitizeScene(scene, includePlayHistory))
-  }
-
-  async function getScenesData(includePlayHistory = false) {
-    const inFlightKey = includePlayHistory ? 'scenesFull' : 'scenesCore'
-
-    if (inFlightDataRequests[inFlightKey]) {
-      return inFlightDataRequests[inFlightKey]
-    }
-
-    inFlightDataRequests[inFlightKey] = fetchScenesData(
-      includePlayHistory,
-    ).finally(() => {
-      inFlightDataRequests[inFlightKey] = null
-    })
-
-    return inFlightDataRequests[inFlightKey]
-  }
-
+  // Scenes for the stats, without play history (fast)
   async function getScenesWithOHistory() {
-    // Core data for top-level stats does not require play history.
-    return getScenesData(false)
-  }
-
-  async function getScenesWithPlayHistory() {
-    return getScenesData(true)
-  }
-
-  // Path element listener - waits for specific page elements to load
-  function PathElementListener(pathPattern, elementSelector, callback) {
-    let lastPath = null
-    let isProcessing = false
-
-    const checkAndSetup = async () => {
-      const currentPath = window.location.pathname
-
-      // Check if we're on the right path
-      if (!currentPath.includes(pathPattern)) {
-        lastPath = currentPath
-        return
-      }
-
-      // Check if path changed or first load
-      if (currentPath === lastPath && isProcessing) {
-        return
-      }
-
-      // Find the target element
-      const element = document.querySelector(elementSelector)
-      if (!element) {
-        return
-      }
-
-      // Only run callback if path changed or first time
-      if (currentPath !== lastPath || !isProcessing) {
-        lastPath = currentPath
-        isProcessing = true
-        try {
-          await callback(element)
-        } finally {
-          isProcessing = false
-        }
-      }
-    }
-
-    // Check on page load
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', checkAndSetup)
-    } else {
-      checkAndSetup()
-    }
-
-    // Watch for navigation changes (SPA routing)
-    const observer = new MutationObserver(() => {
-      checkAndSetup()
-    })
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-
-    // Also listen for popstate (back/forward navigation)
-    window.addEventListener('popstate', checkAndSetup)
-
-    // Check periodically as fallback
-    setInterval(checkAndSetup, 1000)
-  }
-
-  // ===== WATCH TIME TRACKING =====
-  // This section tracks actual play time per day similar to Stash's track-activity plugin
-
-  const TRACKING_INTERVAL = 10000 // Track every 10 seconds
-
-  // In-memory cache of watch data
-  let watchDataCache = null
-  let watchDataLoaded = false
-  let lastSaveTimestamp = 0 // Track when we last saved to detect stale data
-  let isSaving = false // Prevent concurrent saves
-  let pendingSavePromise = Promise.resolve() // Serialize in-flight save operations
-  let saveDebounceTimer = null // Debounce timer for save operations
-  let lastQueuedJobId = null // Track the most recent queued job ID
-
-  let trackingIntervalId = null
-  let trackingLastTickTime = 0
-  const activeVideoElements = new Set()
-  let currentSceneInfo = null // Track current scene being watched
-
-  // Cross-tab communication via localStorage
-  const STORAGE_KEY = 'ostats_watch_data_sync'
-  const STORAGE_LOCK_KEY = 'ostats_save_lock'
-
-  // Broadcast updated data to other tabs
-  function broadcastUpdate(data) {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          data: data,
-          timestamp: Date.now(),
-          tab: Math.random(), // Identify this tab
-        }),
-      )
-    } catch (e) {
-      console.warn('[OStats] Failed to broadcast update:', e)
-    }
-  }
-
-  // Listen for updates from other tabs
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY && e.newValue) {
-      try {
-        const update = JSON.parse(e.newValue)
-        const today = getTodayDate()
-
-        // Only update cache if the broadcast has newer data for today
-        if (update.data && update.data[today]) {
-          if (
-            !watchDataCache ||
-            (watchDataCache[today] || 0) < update.data[today]
-          ) {
-            console.log(
-              '[OStats] Received update from another tab, syncing cache',
-            )
-            watchDataCache = update.data
-            watchDataLoaded = true
-            lastSaveTimestamp = update.timestamp
+    const data = await callGQL({
+      query: `query {
+        findScenes(scene_filter: ${ACTIVE_SCENES_FILTER}, filter: { per_page: -1 }) {
+          scenes {
+            id
+            title
+            o_counter
+            o_history
+            play_duration
+            last_played_at
+            files { basename }
+            paths { screenshot }
           }
         }
-      } catch (e) {
-        console.warn('[OStats] Failed to parse storage update:', e)
-      }
-    }
+      }`,
+    })
+    return (data.findScenes?.scenes || []).map(sanitizeScene)
+  }
+
+  // Adds play history to the scenes from getScenesWithOHistory. Only IDs
+  // and timestamps are downloaded, for scenes that have been played.
+  async function addPlayHistory(scenes) {
+    const data = await callGQL({
+      query: `query {
+        findScenes(
+          scene_filter: { play_count: { value: 0, modifier: GREATER_THAN } }
+          filter: { per_page: -1 }
+        ) {
+          scenes { id play_history }
+        }
+      }`,
+    })
+    const historyById = new Map(
+      (data.findScenes?.scenes || []).map((scene) => [
+        scene.id,
+        scene.play_history || [],
+      ]),
+    )
+    scenes.forEach((scene) => {
+      scene.play_history = historyById.get(scene.id) || []
+    })
+    return scenes
+  }
+
+  // ===== PAGE CHANGES =====
+  // Stash is a single-page app, so pages change without a reload. One
+  // watcher, run at most every 100ms, handles every page O Stats cares
+  // about: the stats page and the scene player. (A timer rather than
+  // requestAnimationFrame, which doesn't run in background tabs.)
+  const pageHandlers = []
+  let pageCheckQueued = false
+
+  function onPageChange(handler) {
+    pageHandlers.push(handler)
+    queuePageCheck()
+  }
+
+  function queuePageCheck() {
+    if (pageCheckQueued) return
+    pageCheckQueued = true
+    setTimeout(() => {
+      pageCheckQueued = false
+      pageHandlers.forEach((handler) => handler(window.location.pathname))
+    }, 100)
+  }
+
+  // Stash's own navigation event, plus the browser's back/forward
+  window.PluginApi?.Event?.addEventListener?.('stash:location', queuePageCheck)
+  window.addEventListener('popstate', queuePageCheck)
+  // Page content (like the scene player or the stats page) can appear a
+  // moment after the address changes
+  new MutationObserver(queuePageCheck).observe(document.body, {
+    childList: true,
+    subtree: true,
   })
 
-  // Get today's date in YYYY-MM-DD format
+  // ===== WATCH TIME TRACKING =====
+  // Counts how long the main scene player actually plays. Time comes from
+  // the player's own progress, so pauses, buffering, seeking and a computer
+  // sleeping mid-video aren't counted. Seconds are collected here and sent
+  // every minute, and whenever playback stops or the page is left; the
+  // server adds them to the day's total (save_watch_data.py).
+
+  const SAVE_INTERVAL_MS = 60000
+
+  let pendingSeconds = 0 // watched but not saved yet
+  let pendingDay = null // the day those seconds belong to
+
   function getTodayDate() {
-    const now = new Date()
-    return getLocalDateString(now) // YYYY-MM-DD format
+    return getLocalDateString(new Date())
   }
 
-  // Extract scene info from current page
-  function getCurrentSceneInfo() {
-    const path = window.location.pathname
-    const match = path.match(/\/scenes\/(\d+)/)
-    if (!match) return null
-
-    const sceneId = match[1]
-
-    // Try multiple methods to get title
-    let title = null
-
-    // Method 1: Try h2 in the scene page
-    const h2Element = document.querySelector(
-      '.scene-header h2, h2.scene-header__title, h2',
-    )
-    if (h2Element) {
-      title = h2Element.textContent.trim()
-    }
-
-    // Method 2: Try title tag and strip " | Scenes | Stash"
-    if (!title || title === '') {
-      const titleTag = document.title
-      if (titleTag && titleTag !== 'Stash') {
-        // Split by pipe and take first part
-        title = titleTag.split('|')[0].trim()
-      }
-    }
-
-    // Fallback
-    if (!title || title === '') {
-      title = `Scene ${sceneId}`
-    }
-
-    return { id: sceneId, title: title }
-  }
-
-  // Load watch time data from Stash configuration (syncs across devices)
-  async function loadWatchTimeData() {
-    // Return cached data if already loaded
-    if (watchDataLoaded && watchDataCache !== null) {
-      console.log('[OStats] Returning cached data')
-      return watchDataCache
-    }
-
-    try {
-      // Load data directly from the JSON file via HTTP
-      // Add timestamp to prevent browser caching of stale data
-      const url = `/plugin/ostats/assets/watch_data.json?t=${Date.now()}`
-      console.log('[OStats] Fetching from:', url)
-      const response = await fetch(url, {
-        cache: 'no-store', // Force bypass of browser cache
-        headers: {
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache',
-        },
-      })
-      console.log(
-        '[OStats] Response status:',
-        response.status,
-        response.statusText,
-      )
-
-      if (response.ok) {
-        const watchData = await response.json()
-
-        // CRITICAL: Only update cache if loaded data is newer or equal
-        // Check if we have cached data with more recent information
-        if (watchDataCache && Object.keys(watchDataCache).length > 0) {
-          const today = getTodayDate()
-          // Simple format: just numbers
-          const cachedTodayTime = watchDataCache[today] || 0
-          const loadedTodayTime = watchData[today] || 0
-
-          // If cached data has more watch time for today, keep it (it's fresher)
-          if (cachedTodayTime > loadedTodayTime) {
-            console.warn(
-              `[OStats] Loaded data appears stale (${loadedTodayTime}s < ${cachedTodayTime}s cached). Keeping cached data.`,
-            )
-            watchDataLoaded = true
-            return watchDataCache
-          }
-        }
-
-        watchDataCache = watchData
-        watchDataLoaded = true
-        console.log(
-          '[OStats] Loaded watch history from JSON file, total days:',
-          Object.keys(watchData).length,
-        )
-        return watchDataCache
-      } else if (response.status === 404) {
-        // Only cache empty data on 404 if we don't have existing cache
-        if (watchDataCache && Object.keys(watchDataCache).length > 0) {
-          console.warn(
-            '[OStats] File not found but have cached data, keeping cache',
-          )
-          watchDataLoaded = true
-          return watchDataCache
-        }
-        console.log('[OStats] No watch history file found, starting fresh')
-        watchDataCache = {}
-        watchDataLoaded = true
-        return watchDataCache
-      } else {
-        console.error('[OStats] Failed to load watch history:', response.status)
-        // Return cached data if available, even if stale
-        if (watchDataCache !== null) {
-          console.warn('[OStats] Using cached data due to load failure')
-          return watchDataCache
-        }
-      }
-    } catch (e) {
-      console.error('[OStats] Error loading watch history:', e)
-      // Return cached data if available, even if stale
-      if (watchDataCache !== null) {
-        console.warn('[OStats] Using cached data due to error')
-        return watchDataCache
-      }
-    }
-
-    // Only reach here if load failed AND no cache exists
-    // This is dangerous - don't cache this empty state
-    console.error(
-      '[OStats] Failed to load watch history and no cache available - using empty data (NOT cached)',
-    )
-    return {}
-  }
-
-  // Save watch time data to JSON file via Python task
-  async function saveWatchTimeData(data) {
-    // Safety check: don't save empty data if we have cached data
-    if (
-      Object.keys(data).length === 0 &&
-      watchDataCache &&
-      Object.keys(watchDataCache).length > 0
-    ) {
-      console.error(
-        '[OStats] Refusing to save empty data - cached data exists!',
-      )
-      return
-    }
-
-    // Clear any existing debounce timer
-    if (saveDebounceTimer) {
-      clearTimeout(saveDebounceTimer)
-    }
-
-    // Debounce: only actually save after 2 seconds of no new save requests
-    saveDebounceTimer = setTimeout(async () => {
-      saveDebounceTimer = null
-
-      // Check if another tab already has a save queued with the same or newer data
-      try {
-        const lockInfo = localStorage.getItem(STORAGE_LOCK_KEY)
-        if (lockInfo) {
-          const lock = JSON.parse(lockInfo)
-          const today = getTodayDate()
-          // If another tab queued a save within last 5 seconds with same/better data, skip
-          if (
-            Date.now() - lock.timestamp < 5000 &&
-            lock.data[today] >= data[today]
-          ) {
-            console.log(
-              '[OStats] Another tab already queued save with current data, skipping',
-            )
-            return
-          }
-        }
-      } catch (e) {
-        console.warn('[OStats] Failed to check save lock:', e)
-      }
-
-      // Set lock to indicate we're saving
-      try {
-        localStorage.setItem(
-          STORAGE_LOCK_KEY,
-          JSON.stringify({
-            timestamp: Date.now(),
-            data: data,
-          }),
-        )
-      } catch (e) {
-        console.warn('[OStats] Failed to set save lock:', e)
-      }
-
-      // If we previously queued a task, try to cancel it
-      if (lastQueuedJobId) {
-        console.log(
-          '[OStats] Attempting to cancel previous save task:',
-          lastQueuedJobId,
-        )
-        try {
-          await callGQL({
-            query: `mutation StopJob($job_id: ID!) {
-              stopJob(job_id: $job_id)
-            }`,
-            variables: {
-              job_id: lastQueuedJobId,
-            },
-          })
-          console.log('[OStats] Canceled old save task')
-        } catch (e) {
-          // Task might have already started/completed, that's fine
-          console.log(
-            '[OStats] Could not cancel task (might be running):',
-            e.message,
-          )
-        }
-        lastQueuedJobId = null
-      }
-
-      isSaving = true
-      try {
-        const today = getTodayDate()
-        const todaysTotal = data[today] || 0
-        console.log('[OStats] Queueing save task, todays total:', todaysTotal)
-
-        const result = await callGQL({
-          query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
-            runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
-          }`,
-          variables: {
-            plugin_id: 'ostats',
-            task_name: 'saveWatchData',
-            args_map: {
-              watch_data: JSON.stringify(data),
-            },
-          },
-        })
-
-        // Store the job ID if available (runPluginTask returns the job ID)
-        if (result.runPluginTask) {
-          lastQueuedJobId = result.runPluginTask
-          console.log('[OStats] Save task queued with ID:', lastQueuedJobId)
-        }
-
-        // Update cache after queuing task
-        watchDataCache = data
-        watchDataLoaded = true
-        lastSaveTimestamp = Date.now()
-
-        // Broadcast to other tabs that save was queued
-        broadcastUpdate(data)
-
-        console.log('[OStats] Watch history save task queued')
-      } catch (e) {
-        console.error('[OStats] Error queueing save task:', e)
-      } finally {
-        isSaving = false
-      }
-    }, 2000) // 2 second debounce
-  }
-
-  // Add watch time for today (simplified - just total time)
-  async function addWatchTime(seconds, sceneInfo) {
-    const today = getTodayDate()
-
-    // Check for updates from other tabs via localStorage
-    try {
-      const storedUpdate = localStorage.getItem(STORAGE_KEY)
-      if (storedUpdate) {
-        const update = JSON.parse(storedUpdate)
-        // Merge with other tabs' data - use the maximum value for today
-        if (update.data && update.data[today]) {
-          if (
-            !watchDataCache ||
-            (watchDataCache[today] || 0) < update.data[today]
-          ) {
-            console.log('[OStats] Merging data from another tab before update')
-            watchDataCache = update.data
-            watchDataLoaded = true
-            lastSaveTimestamp = update.timestamp
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[OStats] Failed to check localStorage for updates:', e)
-    }
-
-    // Use cached data if available
-    const cacheAge = Date.now() - lastSaveTimestamp
-    if (!watchDataCache || cacheAge > 60000) {
-      console.log('[OStats] Cache stale or missing, reloading from disk')
-      watchDataLoaded = false
-      watchDataCache = null
-    }
-
-    const data = await loadWatchTimeData()
-
-    // Safety check: if data is empty and we don't have cache loaded, something went wrong
-    if (Object.keys(data).length === 0 && !watchDataLoaded) {
-      console.error(
-        '[OStats] Cannot add watch time - data load failed and no cache available. Skipping to prevent data loss.',
-      )
-      return
-    }
-
-    // Create a deep copy to avoid mutating the cache directly
-    const dataCopy = JSON.parse(JSON.stringify(data))
-
-    // Migrate old format to simple format if needed
-    if (
-      dataCopy[today] &&
-      typeof dataCopy[today] === 'object' &&
-      'totalTime' in dataCopy[today]
-    ) {
-      // Old format with videos array - extract just the total time
-      dataCopy[today] = dataCopy[today].totalTime || 0
-    }
-
-    // Initialize today's time if it doesn't exist
-    if (!dataCopy[today]) {
-      dataCopy[today] = 0
-    }
-
-    // Update total time (simple format - just a number)
-    dataCopy[today] += seconds
-
-    // Broadcast update to other tabs
-    broadcastUpdate(dataCopy)
-
-    await saveWatchTimeData(dataCopy)
-  }
-
-  function queueWatchTimeSave(seconds) {
-    if (seconds <= 0) return pendingSavePromise
-
-    const sceneLog = currentSceneInfo ? ` (${currentSceneInfo.title})` : ''
-    pendingSavePromise = pendingSavePromise
-      .then(() => addWatchTime(seconds, currentSceneInfo))
-      .then(() => {
-        console.log(
-          `[OStats] Saved ${seconds}s watch time for ${getTodayDate()}${sceneLog}`,
-        )
-      })
-      .catch((err) => {
-        console.error('[OStats] Failed queued watch time save:', err)
-      })
-
-    return pendingSavePromise
-  }
-
-  function flushTrackedWatchTime() {
-    if (activeVideoElements.size === 0) {
-      trackingLastTickTime = Date.now()
-      return 0
-    }
-
-    const now = Date.now()
-    if (!trackingLastTickTime) {
-      trackingLastTickTime = now
-      return 0
-    }
-
-    const elapsedSeconds = Math.floor((now - trackingLastTickTime) / 1000)
-    if (elapsedSeconds <= 0) {
-      return 0
-    }
-
-    trackingLastTickTime += elapsedSeconds * 1000
-    const totalSeconds = elapsedSeconds * activeVideoElements.size
-    queueWatchTimeSave(totalSeconds)
-    return totalSeconds
-  }
-
-  function ensureTrackingInterval() {
-    if (trackingIntervalId) return
-
-    trackingLastTickTime = Date.now()
-    trackingIntervalId = setInterval(() => {
-      flushTrackedWatchTime()
-    }, TRACKING_INTERVAL)
-  }
-
-  // Start tracking watch time for a specific video element.
-  function startWatchTimeTracking(videoElement) {
-    // Only count playback in the main scene player, not previews or other
-    // plugins' videos.
-    if (!isOnScenePage() || !isMainScenePlayer(videoElement)) {
-      return
-    }
-
-    if (videoElement && activeVideoElements.has(videoElement)) {
-      return
-    }
-
-    flushTrackedWatchTime()
-
-    if (videoElement) {
-      activeVideoElements.add(videoElement)
-    }
-
-    if (!currentSceneInfo) {
-      currentSceneInfo = getCurrentSceneInfo()
-    }
-
-    ensureTrackingInterval()
-    console.log(
-      '[OStats] Active video trackers:',
-      activeVideoElements.size,
-      currentSceneInfo ? `(${currentSceneInfo.title})` : '',
-    )
-  }
-
-  // Stop tracking watch time for a specific video element.
-  async function stopWatchTimeTracking(videoElement) {
-    flushTrackedWatchTime()
-
-    if (videoElement) {
-      activeVideoElements.delete(videoElement)
-    } else {
-      activeVideoElements.clear()
-    }
-
-    if (activeVideoElements.size > 0) {
-      trackingLastTickTime = Date.now()
-      console.log('[OStats] Active video trackers:', activeVideoElements.size)
-      return
-    }
-
-    if (trackingIntervalId) {
-      clearInterval(trackingIntervalId)
-      trackingIntervalId = null
-    }
-
-    trackingLastTickTime = 0
-    await pendingSavePromise
-    currentSceneInfo = null
-    console.log('[OStats] Stopped watch time tracking')
-  }
-
-  async function stopAllWatchTimeTracking() {
-    await stopWatchTimeTracking(null)
-  }
-
-  // Check if we're currently on a scene page
   function isOnScenePage() {
-    return /\/scenes\/\d+/.test(window.location.pathname)
+    return /^\/scenes\/\d+/.test(window.location.pathname)
   }
 
-  // Check if a video element is Stash's main scene player
+  // Stash's main scene player, not previews or other plugins' videos
   function isMainScenePlayer(videoElement) {
     return !!videoElement?.closest('.scene-player-container')
   }
 
-  // Hook into video player events
-  function setupVideoPlayerTracking() {
-    function attachTrackingToVideo(videoPlayer) {
-      if (!videoPlayer || videoPlayer.dataset.ostatsTracking) return
-      if (!isMainScenePlayer(videoPlayer)) return
-
-      videoPlayer.dataset.ostatsTracking = 'true'
-
-      videoPlayer.addEventListener('playing', () => {
-        console.log('[OStats] Video playing')
-        startWatchTimeTracking(videoPlayer)
-      })
-
-      videoPlayer.addEventListener('pause', async () => {
-        console.log('[OStats] Video paused')
-        await stopWatchTimeTracking(videoPlayer)
-      })
-
-      videoPlayer.addEventListener('ended', async () => {
-        console.log('[OStats] Video ended')
-        await stopWatchTimeTracking(videoPlayer)
-      })
-
-      videoPlayer.addEventListener('waiting', async () => {
-        console.log('[OStats] Video waiting/buffering')
-        await stopWatchTimeTracking(videoPlayer)
-      })
-
-      videoPlayer.addEventListener('stalled', async () => {
-        console.log('[OStats] Video stalled')
-        await stopWatchTimeTracking(videoPlayer)
-      })
-
-      // If already playing when attached, start tracking immediately.
-      if (!videoPlayer.paused && !videoPlayer.ended) {
-        startWatchTimeTracking(videoPlayer)
+  function runPluginOperation(args, { keepalive = false } = {}) {
+    return fetch('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // keepalive lets the request finish while the page is closing
+      keepalive,
+      body: JSON.stringify({
+        query: `mutation ($args: Map) {
+          runPluginOperation(plugin_id: "ostats", args: $args)
+        }`,
+        variables: { args },
+      }),
+    }).then(async (response) => {
+      const result = await response.json()
+      if (!response.ok || result.errors) {
+        throw new Error(
+          result.errors?.[0]?.message || `HTTP ${response.status}`,
+        )
       }
-
-      console.log('[OStats] Video player tracking setup complete')
-    }
-
-    // Monitor route changes to stop tracking when leaving scene page
-    let lastPath = window.location.pathname
-    const checkPathChange = setInterval(async () => {
-      const currentPath = window.location.pathname
-      if (currentPath !== lastPath) {
-        lastPath = currentPath
-        // If we've left the scene page and tracking is active, stop it
-        if (!isOnScenePage() && activeVideoElements.size > 0) {
-          console.log('[OStats] Left scene page, stopping tracking')
-          await stopAllWatchTimeTracking()
-        }
-      }
-    }, 500) // Check every 500ms
-
-    // Use MutationObserver to detect when video player is added to DOM
-    const observer = new MutationObserver(() => {
-      const videoPlayers = document.querySelectorAll('video')
-      videoPlayers.forEach((videoPlayer) => {
-        attachTrackingToVideo(videoPlayer)
-      })
-    })
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-
-    // Also check if video is already present
-    const existingVideos = document.querySelectorAll('video')
-    existingVideos.forEach((videoPlayer) => {
-      attachTrackingToVideo(videoPlayer)
+      return result.data.runPluginOperation
     })
   }
 
-  // Initialize video player tracking on page load
-  setupVideoPlayerTracking()
+  function addPlayedSeconds(seconds) {
+    const today = getTodayDate()
+    // Past midnight: save what belongs to yesterday first
+    if (pendingDay && pendingDay !== today) saveWatchTime()
+    pendingDay = today
+    pendingSeconds += seconds
+  }
 
-  // Save any remaining watch time before page unload
-  window.addEventListener('beforeunload', (e) => {
-    if (activeVideoElements.size > 0 || trackingIntervalId) {
-      console.log('[OStats] Page unloading, saving watch time...')
-      const pendingSeconds = flushTrackedWatchTime()
+  // Send the whole seconds collected so far; the rest stays for next time
+  function saveWatchTime({ keepalive = false } = {}) {
+    const seconds = Math.floor(pendingSeconds)
+    if (seconds <= 0) return
+    const day = pendingDay
+    pendingSeconds -= seconds
 
-      if (trackingIntervalId) {
-        clearInterval(trackingIntervalId)
-        trackingIntervalId = null
-      }
+    runPluginOperation({ mode: 'add', day, seconds }, { keepalive })
+      .then((total) => debugLog(`Saved ${seconds}s for ${day} (${total}s)`))
+      .catch((err) => {
+        console.error('[OStats] Failed to save watch time:', err)
+        // Keep the seconds to try again with the next save
+        if (pendingDay === day) pendingSeconds += seconds
+      })
+  }
 
-      if (pendingSeconds > 0) {
-        const data = watchDataCache || {}
-        const today = getTodayDate()
+  function trackPlayer(video) {
+    if (video.dataset.ostatsTracking) return
+    video.dataset.ostatsTracking = 'true'
+    debugLog('Tracking scene player')
 
-        if (
-          data[today] &&
-          typeof data[today] === 'object' &&
-          'totalTime' in data[today]
-        ) {
-          data[today] = data[today].totalTime || 0
-        }
+    let lastMediaTime = video.currentTime
+    let lastClockTime = performance.now()
 
-        if (!data[today]) {
-          data[today] = 0
-        }
-        data[today] += pendingSeconds
-
-        watchDataCache = data
-        try {
-          navigator.sendBeacon(
-            '/graphql',
-            JSON.stringify({
-              query: `mutation RunPluginTask($plugin_id: ID!, $task_name: String!, $args_map: Map) {
-              runPluginTask(plugin_id: $plugin_id, task_name: $task_name, args_map: $args_map)
-            }`,
-              variables: {
-                plugin_id: 'ostats',
-                task_name: 'saveWatchData',
-                args_map: { watch_data: JSON.stringify(data) },
-              },
-            }),
-          )
-        } catch (err) {
-          console.error('[OStats] Failed to send beacon:', err)
-        }
-        console.log(`[OStats] Beforeunload: saved ${pendingSeconds}s`)
-      }
-
-      activeVideoElements.clear()
-      trackingLastTickTime = 0
-      currentSceneInfo = null
+    function resetBaseline() {
+      lastMediaTime = video.currentTime
+      lastClockTime = performance.now()
     }
+
+    video.addEventListener('timeupdate', () => {
+      const now = performance.now()
+      const played =
+        (video.currentTime - lastMediaTime) / (video.playbackRate || 1)
+      const elapsed = (now - lastClockTime) / 1000
+      lastMediaTime = video.currentTime
+      lastClockTime = now
+      // Normal playback moves forward about as fast as the clock. Seeks
+      // jump further (or backwards), so they're left out.
+      if (played > 0 && played <= elapsed + 1 && isOnScenePage()) {
+        addPlayedSeconds(played)
+      }
+    })
+    video.addEventListener('seeking', resetBaseline)
+    video.addEventListener('play', resetBaseline)
+    video.addEventListener('pause', () => saveWatchTime())
+    video.addEventListener('ended', () => saveWatchTime())
+  }
+
+  let wasOnScenePage = false
+  onPageChange(() => {
+    const onScenePage = isOnScenePage()
+    // Left a scene page: save what was watched there
+    if (wasOnScenePage && !onScenePage) saveWatchTime()
+    wasOnScenePage = onScenePage
+    if (!onScenePage) return
+
+    const video = document.querySelector('.scene-player-container video')
+    if (isMainScenePlayer(video)) trackPlayer(video)
   })
 
-  // ===== END WATCH TIME TRACKING =====
+  setInterval(saveWatchTime, SAVE_INTERVAL_MS)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveWatchTime({ keepalive: true })
+  })
+  window.addEventListener('pagehide', () => saveWatchTime({ keepalive: true }))
+
+  // The stats page reads the file directly; it is served as a plugin asset
+  async function loadWatchTimeData() {
+    try {
+      const response = await fetch(
+        `/plugin/ostats/assets/watch_data.json?t=${Date.now()}`,
+        { cache: 'no-store' },
+      )
+      if (response.status === 404) return {}
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      return await response.json()
+    } catch (e) {
+      console.error('[OStats] Failed to load watch time:', e)
+      return {}
+    }
+  }
+
 
   // ===== UI BUILDING BLOCKS =====
   // Styles live in ostats.css; elements only get classes here.
@@ -1010,36 +482,33 @@
     window.open(`/scenes/${sceneId}`, '_blank', 'noopener,noreferrer')
   }
 
-  // OPTIMIZATION: Pre-process O history into a day map to avoid repeated iteration
+  // O history by day, built once and shared by every stat:
+  //   dayMap:    day -> [{ scene, time }]
+  //   dayTotals: day -> number of O's
+  //   lastO:     scene id -> time of that scene's latest O (ms)
   function buildOHistoryDayMap(scenes) {
     const dayMap = new Map()
     const dayTotals = {}
+    const lastO = new Map()
 
     scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        scene.o_history.forEach((timestamp) => {
-          // Skip invalid/undated O's
-          if (!timestamp) return
+      scene.o_history.forEach((timestamp) => {
+        if (!timestamp) return
+        const time = new Date(timestamp)
+        if (isNaN(time.getTime())) return
 
-          const date = new Date(timestamp)
-          // Validate date
-          if (isNaN(date.getTime())) return
+        const day = getLocalDateString(time)
+        if (!dayMap.has(day)) dayMap.set(day, [])
+        dayMap.get(day).push({ scene, time })
+        dayTotals[day] = (dayTotals[day] || 0) + 1
 
-          const day = getLocalDateString(date)
-
-          // Add to day map (for detailed queries)
-          if (!dayMap.has(day)) {
-            dayMap.set(day, [])
-          }
-          dayMap.get(day).push({ scene, timestamp })
-
-          // Increment totals (for quick counts)
-          dayTotals[day] = (dayTotals[day] || 0) + 1
-        })
-      }
+        if (time.getTime() > (lastO.get(scene.id) || 0)) {
+          lastO.set(scene.id, time.getTime())
+        }
+      })
     })
 
-    return { dayMap, dayTotals }
+    return { dayMap, dayTotals, lastO }
   }
 
   // orgasms today
@@ -1120,7 +589,7 @@
   }
 
   // Export/Import watch time data as JSON
-  function createWatchTimeExportButton(row, scenesForExport = null) {
+  function createWatchTimeExportButton(row, oHistoryCache) {
     const container = createEl('div', 'os-toolbar')
     row.appendChild(container)
 
@@ -1134,27 +603,17 @@
 
       try {
         const watchTimeData = await loadWatchTimeData()
-        const scenes = scenesForExport || (await getScenesWithOHistory())
-        const oHistoryCache = buildOHistoryDayMap(scenes)
 
-        // Clean data for export and add O counts
+        // Watch time and O count per day
         const cleanedData = {}
-        Object.keys(watchTimeData).forEach((day) => {
-          const dayData = watchTimeData[day]
-          let watchSeconds = 0
-
-          if (typeof dayData === 'number') {
-            watchSeconds = dayData
-          } else if (typeof dayData === 'object' && 'totalTime' in dayData) {
-            watchSeconds = dayData.totalTime || 0
-          }
-
-          // Watch time and O count for this day
-          cleanedData[day] = {
-            seconds: watchSeconds,
-            o_count: oHistoryCache.dayTotals[day] || 0,
-          }
-        })
+        Object.keys(watchTimeData)
+          .sort()
+          .forEach((day) => {
+            cleanedData[day] = {
+              seconds: getWatchSeconds(watchTimeData[day]),
+              o_count: oHistoryCache.dayTotals[day] || 0,
+            }
+          })
 
         // Create JSON with metadata
         const exportData = {
@@ -1175,9 +634,7 @@
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = `ostats-watch-time-${new Date()
-          .toISOString()
-          .slice(0, 10)}.json`
+        a.download = `ostats-watch-time-${getTodayDate()}.json`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -1189,7 +646,7 @@
           jsonBtn.disabled = false
         }, 2000)
       } catch (error) {
-        console.error('Export failed:', error)
+        console.error('[OStats] Export failed:', error)
         jsonBtn.innerText = '✗ Export Failed'
         setTimeout(() => {
           jsonBtn.innerText = '💾 Export JSON'
@@ -1224,83 +681,30 @@
           const text = await file.text()
           const importData = JSON.parse(text)
 
-          // Determine if this is wrapped format (with "data" property) or direct format
-          let dataToImport
-          if (importData.data && typeof importData.data === 'object') {
-            // New export format with wrapper
-            dataToImport = importData.data
-            console.log(
-              '[OStats] Importing data from wrapped format, total days:',
-              Object.keys(dataToImport).length,
-            )
-          } else if (
-            importData.version === undefined &&
-            typeof importData === 'object'
-          ) {
-            // Old direct format (just the watch data object)
-            dataToImport = importData
-            console.log(
-              '[OStats] Importing data from direct format, total days:',
-              Object.keys(dataToImport).length,
-            )
-          } else {
+          // Exports wrap the days in "data"; very old backups are just the
+          // days. The server reads every format O Stats has exported
+          // ({ seconds, o_count }, "seconds,oCount" and plain numbers) and
+          // keeps only the watch time; O counts come from Stash itself.
+          const days =
+            importData.data && typeof importData.data === 'object'
+              ? importData.data
+              : importData
+          if (!days || typeof days !== 'object' || Array.isArray(days)) {
             throw new Error('Invalid file format')
           }
 
-          // Keep only the watch time; O counts come from Stash itself.
-          // Reads every export format: { seconds, o_count } (3.0),
-          // "watchTime,oCount" (2.0) and plain numbers (older).
-          const cleanedDataToImport = {}
-          Object.keys(dataToImport).forEach((day) => {
-            const value = dataToImport[day]
-            if (value && typeof value === 'object' && 'seconds' in value) {
-              cleanedDataToImport[day] = Number(value.seconds) || 0
-            } else if (typeof value === 'string' && value.includes(',')) {
-              // New format: "watchTime,oCount" - extract just watch time
-              cleanedDataToImport[day] = parseInt(value.split(',')[0])
-            } else if (typeof value === 'number') {
-              // Old format: just a number
-              cleanedDataToImport[day] = value
-            } else {
-              cleanedDataToImport[day] = 0
-            }
+          // Replaces all watch time with the file's
+          const importedDays = await runPluginOperation({
+            mode: 'save',
+            watch_data: JSON.stringify(days),
           })
+          if (!importedDays) throw new Error('No days found in the file')
 
-          console.log(
-            '[OStats] Importing data sample:',
-            JSON.stringify(cleanedDataToImport).substring(0, 200),
-          )
-
-          // Delete all local data and replace with imported data
-          await saveWatchTimeData(cleanedDataToImport)
-
-          // Wait a bit for file write to complete
-          await new Promise((resolve) => setTimeout(resolve, 500))
-
-          // Clear cache BEFORE verification to force fresh load from file
-          watchDataCache = null
-          watchDataLoaded = false
-
-          // Verify the save by loading it back
-          const verifyData = await loadWatchTimeData()
-          console.log(
-            '[OStats] Verification after import, total days:',
-            Object.keys(verifyData).length,
-          )
-          console.log(
-            '[OStats] Verify data sample:',
-            JSON.stringify(verifyData).substring(0, 200),
-          )
-
-          importBtn.innerText = '✓ Imported!'
-          setTimeout(() => {
-            importBtn.innerText = '📥 Import JSON'
-            importBtn.disabled = false
-            // Reload page to show new data - wait longer to ensure save completes
-            window.location.reload()
-          }, 2000)
+          importBtn.innerText = `✓ Imported ${importedDays} days`
+          // Reload to show the imported data
+          setTimeout(() => window.location.reload(), 1000)
         } catch (error) {
-          console.error('Import failed:', error)
+          console.error('[OStats] Import failed:', error)
           importBtn.innerText = '✗ Import Failed'
           setTimeout(() => {
             importBtn.innerText = '📥 Import JSON'
@@ -1403,8 +807,8 @@
         currentStreak = 1
         currentStreakStart = allSortedDays[i]
       } else {
-        const prevDate = new Date(allSortedDays[i - 1])
-        const currDate = new Date(allSortedDays[i])
+        const prevDate = parseLocalDate(allSortedDays[i - 1])
+        const currDate = parseLocalDate(allSortedDays[i])
         const dayDiff = Math.round(
           (currDate - prevDate) / (1000 * 60 * 60 * 24),
         )
@@ -1593,12 +997,11 @@
   }
 
   // longest watched scene
-  async function createLongestWatchedScene(row, scenes = null) {
-    const sceneList = scenes || (await getScenesWithOHistory())
+  function createLongestWatchedScene(row, scenes) {
     let maxScene = null
     let maxDuration = 0
 
-    sceneList.forEach((scene) => {
+    scenes.forEach((scene) => {
       const duration = scene.play_duration || 0
       if (duration > maxDuration) {
         maxDuration = duration
@@ -1628,79 +1031,45 @@
     }
   }
 
-  // most recent O scene
-  async function createMostRecentOScene(row, scenes) {
-    let recentScene = null
-    let recentTimestamp = null
-
+  // The scene whose latest O is the newest (or the oldest)
+  function findSceneByLastO(scenes, oHistoryCache, pickNewest) {
+    let found = null
+    let foundTime = null
     scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        // Filter out invalid timestamps
-        const validTimestamps = scene.o_history.filter((t) => {
-          if (!t) return false
-          const date = new Date(t)
-          return !isNaN(date.getTime())
-        })
-
-        if (validTimestamps.length === 0) return
-
-        const mostRecent = validTimestamps.sort().reverse()[0]
-        if (!recentTimestamp || mostRecent > recentTimestamp) {
-          recentTimestamp = mostRecent
-          recentScene = scene
-        }
+      const time = oHistoryCache.lastO.get(scene.id)
+      if (!time) return
+      if (foundTime === null || (pickNewest ? time > foundTime : time < foundTime)) {
+        found = scene
+        foundTime = time
       }
     })
-
-    if (recentScene) {
-      const date = new Date(recentTimestamp)
-      const timeAgo = formatTimeAgo(date)
-      createHighlightCard(
-        row,
-        recentScene,
-        timeAgo,
-        'Most Recent O',
-        'var(--os-purple)',
-      )
-    }
+    return found ? { scene: found, time: new Date(foundTime) } : null
   }
 
-  // oldest O scene
-  async function createOldestOScene(row, scenes) {
-    let oldestScene = null
-    let oldestRecentTimestamp = null
+  // most recent O scene
+  function createMostRecentOScene(row, scenes, oHistoryCache) {
+    const result = findSceneByLastO(scenes, oHistoryCache, true)
+    if (!result) return
+    createHighlightCard(
+      row,
+      result.scene,
+      formatTimeAgo(result.time),
+      'Most Recent O',
+      'var(--os-purple)',
+    )
+  }
 
-    scenes.forEach((scene) => {
-      if (scene.o_history && scene.o_history.length > 0) {
-        // Filter out invalid timestamps
-        const validTimestamps = scene.o_history.filter((t) => {
-          if (!t) return false
-          const date = new Date(t)
-          return !isNaN(date.getTime())
-        })
-
-        if (validTimestamps.length === 0) return
-
-        // Get the most recent O for this scene
-        const mostRecent = validTimestamps.sort().reverse()[0]
-        if (!oldestRecentTimestamp || mostRecent < oldestRecentTimestamp) {
-          oldestRecentTimestamp = mostRecent
-          oldestScene = scene
-        }
-      }
-    })
-
-    if (oldestScene) {
-      const date = new Date(oldestRecentTimestamp)
-      const timeAgo = formatTimeAgo(date)
-      createHighlightCard(
-        row,
-        oldestScene,
-        timeAgo,
-        'Oldest O',
-        'var(--os-amber)',
-      )
-    }
+  // oldest O scene: the scene whose latest O is the longest ago
+  function createOldestOScene(row, scenes, oHistoryCache) {
+    const result = findSceneByLastO(scenes, oHistoryCache, false)
+    if (!result) return
+    createHighlightCard(
+      row,
+      result.scene,
+      formatTimeAgo(result.time),
+      'Oldest O',
+      'var(--os-amber)',
+    )
   }
 
   // ===== CALENDARS =====
@@ -1857,12 +1226,8 @@
 
       const yearDays = days.filter((day) => !day.isOutside && !day.isFuture)
       const total = yearDays.reduce((sum, day) => sum + day.value, 0)
-      const activeDays = yearDays.filter((day) => day.value > 0).length
       totalEl.innerHTML = ''
-      totalEl.append(
-        createEl('strong', '', formatTotal(total)),
-        ` on ${plural(activeDays, 'day')} in ${year}`,
-      )
+      totalEl.append(createEl('strong', '', formatTotal(total)), ` in ${year}`)
 
       const maxValue = Math.max(1, ...yearDays.map((day) => day.value))
 
@@ -2435,12 +1800,25 @@
     options = {},
   ) {
     const {
+      watchTimeData = {},
       hideStats = false,
       expandedByDefault = false,
       timelineExpandedByDefault = false,
       hideTimelineOs = false,
       showTimelineWatches = false,
     } = options
+
+    // Plays by day, built once instead of on every day change
+    const playDayMap = new Map()
+    scenes.forEach((scene) => {
+      scene.play_history.forEach((timestamp) => {
+        const time = new Date(timestamp)
+        if (isNaN(time.getTime())) return
+        const day = getLocalDateString(time)
+        if (!playDayMap.has(day)) playDayMap.set(day, [])
+        playDayMap.get(day).push({ scene, time })
+      })
+    })
     // Create main container
     const mainContainer = createEl('div', 'os-card os-otd')
     mainContainer.id = 'on-this-day-section'
@@ -2461,72 +1839,31 @@
       targetDate.setDate(now.getDate() + dayOffset)
       const targetDay = getLocalDateString(targetDate) // YYYY-MM-DD format
 
-      // Get day's O's from cache
-      const cachedOEvents = oHistoryCache.dayMap.get(targetDay) || []
+      // The day's O's, oldest first
+      const dayOs = (oHistoryCache.dayMap.get(targetDay) || [])
+        .map(({ scene, time }) => ({ scene, time }))
+        .sort((a, b) => a.time - b.time)
 
-      // Collect day's O's with times for timeline display
-      const dayOs = cachedOEvents.map((event) => ({
-        time: new Date(event.timestamp),
-        hour: new Date(event.timestamp).getHours(),
-        minute: new Date(event.timestamp).getMinutes(),
-        scene: event.scene,
+      // Everything watched that day: each O, plus plays that aren't within
+      // 30 minutes of an O or another play of the same scene
+      const daySceneEvents = dayOs.map(({ scene, time }) => ({
+        scene,
+        time,
+        hasO: true,
       }))
-
-      // Collect all events (O's and plays) for this day
-      const daySceneEvents = []
-
-      // Add O events from cache
-      cachedOEvents.forEach((event) => {
-        daySceneEvents.push({
-          scene: event.scene,
-          time: new Date(event.timestamp),
-          hasO: true,
+      const NEARBY_MS = 30 * 60 * 1000
+      ;(playDayMap.get(targetDay) || [])
+        .slice()
+        .sort((a, b) => a.time - b.time)
+        .forEach(({ scene, time }) => {
+          const isNearby = daySceneEvents.some(
+            (event) =>
+              event.scene.id === scene.id &&
+              Math.abs(event.time - time) < NEARBY_MS,
+          )
+          if (!isNearby) daySceneEvents.push({ scene, time, hasO: false })
         })
-      })
-
-      // Collect play times for this day
-      scenes.forEach((scene) => {
-        if (scene.play_history && scene.play_history.length > 0) {
-          scene.play_history.forEach((timestamp) => {
-            const date = new Date(timestamp)
-            const day = getLocalDateString(date)
-            if (day === targetDay) {
-              // Check if there's an O for THIS SPECIFIC SCENE within 30 minutes
-              const hasNearbyO = daySceneEvents.some(
-                (oEvent) =>
-                  oEvent.hasO &&
-                  oEvent.scene.id === scene.id &&
-                  Math.abs(oEvent.time - date) < 1800000, // 30 minutes in ms
-              )
-
-              // Only add watch event if there's no O nearby for this scene
-              if (!hasNearbyO) {
-                // Also check for duplicate watch events within 30 minutes
-                const hasDuplicateWatch = daySceneEvents.some(
-                  (existingEvent) =>
-                    !existingEvent.hasO &&
-                    existingEvent.scene.id === scene.id &&
-                    Math.abs(existingEvent.time - date) < 1800000,
-                )
-
-                if (!hasDuplicateWatch) {
-                  daySceneEvents.push({
-                    scene: scene,
-                    time: date,
-                    hasO: false,
-                  })
-                }
-              }
-            }
-          })
-        }
-      })
-
-      // Sort events by time
       daySceneEvents.sort((a, b) => a.time - b.time)
-
-      // Sort O's by time
-      dayOs.sort((a, b) => a.time - b.time)
 
       // Clear container
       mainContainer.innerHTML = ''
@@ -2858,8 +2195,6 @@
       )
       videoListContainer.appendChild(videoList)
 
-      // Load watch time data
-      const watchTimeData = await loadWatchTimeData()
       const targetDayWatchData = watchTimeData[targetDay]
       const watchTimeSeconds = getWatchSeconds(targetDayWatchData)
 
@@ -2959,7 +2294,11 @@
     window.onThisDayRender = renderDay
   }
 
-  PathElementListener('/stats', 'div.container-fluid div.mt-5', setupStats)
+  onPageChange((path) => {
+    if (path !== '/stats') return
+    const statsPage = document.querySelector('div.container-fluid div.mt-5')
+    if (statsPage) setupStats(statsPage)
+  })
   async function setupStats(el) {
     if (document.getElementById('ostats-root')) return
 
@@ -3060,11 +2399,11 @@
           ],
           [
             settings.hideSceneHighlightsMostRecentO,
-            (row) => createMostRecentOScene(row, scenes),
+            (row) => createMostRecentOScene(row, scenes, oHistoryCache),
           ],
           [
             settings.hideSceneHighlightsOldestO,
-            (row) => createOldestOScene(row, scenes),
+            (row) => createOldestOScene(row, scenes, oHistoryCache),
           ],
         ].filter(([hidden]) => !hidden)
 
@@ -3138,19 +2477,19 @@
     }
 
     if (!settings.hideExportImportButtons) {
-      createWatchTimeExportButton(root, scenes)
+      createWatchTimeExportButton(root, oHistoryCache)
     }
 
     if (!onThisDaySection) return
 
-    // Heavy path: fetch full play history in background and hydrate the section.
+    // On This Day also needs play history, loaded after everything else
     const onThisDayBody = createEl('div')
-    getScenesWithPlayHistory()
-      .then(async (fullScenes) => {
-        const fullHistoryCache = buildOHistoryDayMap(fullScenes)
+    addPlayHistory(scenes)
+      .then(async () => {
         onThisDaySection.querySelector('.os-otd-loading')?.remove()
         onThisDaySection.appendChild(onThisDayBody)
-        await createOnThisDaySection(onThisDayBody, fullScenes, fullHistoryCache, {
+        await createOnThisDaySection(onThisDayBody, scenes, oHistoryCache, {
+          watchTimeData,
           hideStats: settings.hideOnThisDayStats,
           expandedByDefault: settings.expandOnThisDayList,
           timelineExpandedByDefault: settings.expandOnThisDayTimeline,

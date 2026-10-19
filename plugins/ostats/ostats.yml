@@ -1,6 +1,6 @@
 name: O Stats
 description: Adds O stats to the stats page
-version: 2.0
+version: 2.1
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   css:
@@ -11,7 +11,7 @@ ui:
     /: .
 settings:
   01_hideTopStats:
-    displayName: "Hide Today Stats"
+    displayName: 'Hide Today Stats'
     type: BOOLEAN
     description: Hides the whole Today row (O's today, streak, watch time today and videos watched today). Default false.
   02_hideTopStatsOsToday:
@@ -19,19 +19,19 @@ settings:
     type: BOOLEAN
     description: Hides the O's Today stat. Has no effect if Hide Today Stats is on. Default false.
   04_hideTopStatsStreak:
-    displayName: "[Today] Hide Streak"
+    displayName: '[Today] Hide Streak'
     type: BOOLEAN
     description: Hides the Streak stat. Has no effect if Hide Today Stats is on. Default false.
   04a_hideTodayWatchTime:
-    displayName: "[Today] Hide Watch Time Today"
+    displayName: '[Today] Hide Watch Time Today'
     type: BOOLEAN
     description: Hides the Watch Time Today stat. Has no effect if Hide Today Stats is on. Default false.
   04b_hideTodayVideosWatched:
-    displayName: "[Today] Hide Videos Watched Today"
+    displayName: '[Today] Hide Videos Watched Today'
     type: BOOLEAN
     description: Hides the Videos Watched Today stat. Has no effect if Hide Today Stats is on. Default false.
   06a_hideAllTimeStats:
-    displayName: "Hide All Time & Records"
+    displayName: 'Hide All Time & Records'
     type: BOOLEAN
     description: Hides the whole All Time & Records row (total O's, total plays, total play duration, most O's in one day, most time spent in one day and average min/O). Default false.
   06b_hideTopStatsRecordDay:
@@ -39,11 +39,11 @@ settings:
     type: BOOLEAN
     description: Hides the Most O's in One Day stat. Has no effect if Hide All Time & Records is on. Default false.
   06c_hideTopStatsRecordSession:
-    displayName: "[All Time & Records] Hide Most Time Spent in One Day"
+    displayName: '[All Time & Records] Hide Most Time Spent in One Day'
     type: BOOLEAN
     description: Hides the Most Time Spent in One Day stat (most watch time in a single day). Has no effect if Hide All Time & Records is on. Default false.
   06d_hideTopStatsAverageMinPerO:
-    displayName: "[All Time & Records] Hide Average min/O"
+    displayName: '[All Time & Records] Hide Average min/O'
     type: BOOLEAN
     description: Hides the Average min/O stat. Has no effect if Hide All Time & Records is on. Default false.
   07_hideSceneHighlights:
@@ -115,16 +115,9 @@ settings:
     type: BOOLEAN
     description: Hides the Export JSON and Import JSON buttons at the bottom of the page. Default false.
 
+# Run by the stats page and the scene player (runPluginOperation) to read
+# and save watch time; see save_watch_data.py
 exec:
   - python
   - '{pluginDir}/save_watch_data.py'
 interface: raw
-tasks:
-  - name: saveWatchData
-    description: Used by the O Stats page to save watch time while you watch. You don't need to run this yourself.
-    defaultArgs:
-      mode: save
-  - name: loadWatchData
-    description: Used by the O Stats page to load watch time. You don't need to run this yourself.
-    defaultArgs:
-      mode: load
