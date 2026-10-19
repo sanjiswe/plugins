@@ -16,12 +16,14 @@
   // Each goal is counted from the totals Stash had when the plugin was first
   // loaded, so everyone starts fresh no matter how much they watched before.
   const TIERS = {
-    common: { label: 'Common', accent: 'var(--ch-green)' },
-    uncommon: { label: 'Uncommon', accent: 'var(--ch-blue)' },
-    rare: { label: 'Rare', accent: 'var(--ch-purple)' },
-    epic: { label: 'Epic', accent: 'var(--ch-orange)' },
-    legendary: { label: 'Legendary', accent: 'var(--ch-amber)' },
+    common: { label: 'Common', accent: 'var(--ch-green)', points: 10 },
+    uncommon: { label: 'Uncommon', accent: 'var(--ch-blue)', points: 25 },
+    rare: { label: 'Rare', accent: 'var(--ch-purple)', points: 50 },
+    epic: { label: 'Epic', accent: 'var(--ch-orange)', points: 100 },
+    legendary: { label: 'Legendary', accent: 'var(--ch-amber)', points: 250 },
   }
+
+  const TOAST_DURATION = 4000
 
   const MINUTE = 60
   const HOUR = 3600
@@ -410,15 +412,20 @@
     toast.style.setProperty('--ch-accent', TIERS[achievement.tier].accent)
     toast.title = 'View achievements'
     toast.appendChild(createEl('div', 'ch-toast-icon', achievement.icon))
-    const text = createEl('div', 'ch-toast-text')
-    text.appendChild(createEl('div', 'ch-toast-kicker', 'Achievement Unlocked'))
-    text.appendChild(createEl('div', 'ch-toast-name', achievement.name))
-    text.appendChild(createEl('div', 'ch-toast-desc', achievement.desc))
-    toast.appendChild(text)
+    toast.appendChild(createEl('div', 'ch-toast-kicker', 'Achievement Unlocked'))
+    toast.appendChild(createEl('div', 'ch-toast-name', achievement.name))
+    toast.appendChild(createEl('div', 'ch-toast-desc', achievement.desc))
+    toast.appendChild(
+      createEl(
+        'div',
+        'ch-toast-points',
+        `+${TIERS[achievement.tier].points} pts`,
+      ),
+    )
 
     const dismiss = () => {
       toast.classList.add('is-leaving')
-      setTimeout(() => toast.remove(), 300)
+      setTimeout(() => toast.remove(), 600)
     }
     toast.addEventListener('click', () => {
       navigateTo(ROUTE)
@@ -427,7 +434,7 @@
 
     getToastStack().appendChild(toast)
     requestAnimationFrame(() => toast.classList.add('is-shown'))
-    setTimeout(dismiss, 7000)
+    setTimeout(dismiss, TOAST_DURATION)
   }
 
   // ===== NAVBAR BUTTON =====
@@ -548,6 +555,7 @@
       meta.appendChild(
         createEl('span', 'ch-ach-done', `✓ Unlocked ${formatDate(unlockedAt)}`),
       )
+      meta.appendChild(createEl('span', 'ch-ach-points', `+${tier.points} pts`))
     } else {
       meta.appendChild(
         createEl(
@@ -556,7 +564,9 @@
           `${category.format(current)} / ${category.format(achievement.goal)}`,
         ),
       )
-      meta.appendChild(createEl('span', '', `${pct}%`))
+      const right = createEl('span', '', `${pct}% · `)
+      right.appendChild(createEl('span', 'ch-ach-points', `${tier.points} pts`))
+      meta.appendChild(right)
     }
     card.appendChild(meta)
 
@@ -621,7 +631,28 @@
       .map((a) => ({ a, pct: progress[a.category.stat] / a.goal }))
       .sort((x, y) => y.pct - x.pct)[0]
 
-    const summary = createSection(root, 'Overview')
+    const earnedPoints = ALL_ACHIEVEMENTS.filter(
+      (a) => state.unlocked[a.id],
+    ).reduce((sum, a) => sum + TIERS[a.tier].points, 0)
+    const totalPoints = ALL_ACHIEVEMENTS.reduce(
+      (sum, a) => sum + TIERS[a.tier].points,
+      0,
+    )
+
+    const summary = createSection(
+      root,
+      'Overview & Stats Since Tracking Started',
+    )
+    const pointsTag = createEl(
+      'span',
+      'ch-points-tag',
+      `⭐ ${earnedPoints.toLocaleString()} pts `,
+    )
+    pointsTag.appendChild(
+      createEl('span', '', `/ ${totalPoints.toLocaleString()}`),
+    )
+    pointsTag.title = 'Points from unlocked achievements'
+    summary.querySelector('.ch-section-head').appendChild(pointsTag)
     const grid = createEl('div', 'ch-grid')
     summary.appendChild(grid)
     createSummaryStat(grid, {
@@ -635,21 +666,18 @@
       icon: '⏱️',
       value: formatLongDuration(progress.watch),
       label: 'Watch Time',
-      sub: 'Since achievements started',
       accent: 'var(--ch-green)',
     })
     createSummaryStat(grid, {
       icon: '💦',
       value: progress.o.toLocaleString(),
       label: "O's",
-      sub: 'Since achievements started',
       accent: 'var(--ch-blue)',
     })
     createSummaryStat(grid, {
       icon: '📺',
       value: progress.plays.toLocaleString(),
       label: 'Videos Watched',
-      sub: 'Since achievements started',
       accent: 'var(--ch-purple)',
     })
     createSummaryStat(grid, {
