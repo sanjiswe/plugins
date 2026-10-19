@@ -1,0 +1,477 @@
+/* O Cheevs - achievements page styles.
+   Tokens and card styles match O Stats so the two pages look like one set. */
+
+/* ===== Tokens ===== */
+.ch,
+.ch-toasts {
+  --ch-card: rgba(255, 255, 255, 0.035);
+  --ch-card-hover: rgba(255, 255, 255, 0.06);
+  --ch-inset: rgba(0, 0, 0, 0.22);
+  --ch-border: rgba(255, 255, 255, 0.08);
+  --ch-border-strong: rgba(255, 255, 255, 0.16);
+  --ch-text: #f2f5f8;
+  --ch-muted: #9aa5b1;
+  --ch-faint: #6b7682;
+  --ch-radius: 14px;
+  --ch-radius-sm: 9px;
+
+  --ch-blue: #4c8dff;
+  --ch-green: #34c38f;
+  --ch-amber: #f5b942;
+  --ch-orange: #ff8a3d;
+  --ch-purple: #a78bfa;
+  --ch-pink: #f472b6;
+  --ch-gray: #8a94a6;
+}
+
+.ch-page {
+  margin-top: 3rem;
+}
+
+.ch {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 1rem 10rem;
+  color: var(--ch-text);
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ch *,
+.ch *::before,
+.ch *::after,
+.ch-toasts * {
+  box-sizing: border-box;
+}
+
+/* ===== Page header ===== */
+.ch-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-top: 0.5rem;
+}
+
+.ch-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.ch-hero-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  font-size: 1.45rem;
+  background: linear-gradient(
+    135deg,
+    rgba(245, 185, 66, 0.35),
+    rgba(245, 185, 66, 0.08)
+  );
+  border: 1px solid rgba(245, 185, 66, 0.35);
+}
+
+.ch-hero h2 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.ch-hero-sub {
+  color: var(--ch-muted);
+  font-size: 0.9rem;
+  margin-top: 0.1rem;
+}
+
+.ch-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ===== Buttons ===== */
+.ch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  color: var(--ch-text);
+  background: transparent;
+  border: 1px solid var(--ch-border-strong);
+  border-radius: var(--ch-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+  text-decoration: none;
+}
+
+.ch-btn:hover:not(:disabled) {
+  background: var(--ch-card-hover);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--ch-text);
+  text-decoration: none;
+}
+
+.ch-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===== Sections ===== */
+.ch-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.ch-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ch-section-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ch-muted);
+}
+
+.ch-section-note {
+  font-size: 0.8rem;
+  color: var(--ch-faint);
+}
+
+.ch-card {
+  background: var(--ch-card);
+  border: 1px solid var(--ch-border);
+  border-radius: var(--ch-radius);
+}
+
+/* ===== Summary cards ===== */
+.ch-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.ch-stat {
+  --ch-accent: var(--ch-blue);
+  position: relative;
+  padding: 1.05rem 1.1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ch-stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--ch-accent);
+  opacity: 0.55;
+}
+
+.ch-stat-icon,
+.ch-ach-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+  background: color-mix(in srgb, var(--ch-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ch-accent) 30%, transparent);
+}
+
+.ch-stat-icon {
+  margin-bottom: 0.55rem;
+}
+
+.ch-stat-value {
+  font-size: 1.85rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ch-stat-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ch-muted);
+  margin-top: 0.2rem;
+}
+
+.ch-stat-sub {
+  font-size: 0.8rem;
+  color: var(--ch-faint);
+  margin-top: 0.15rem;
+  line-height: 1.4;
+}
+
+/* ===== Achievement cards ===== */
+.ch-ach-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.ch-ach {
+  --ch-accent: var(--ch-blue);
+  position: relative;
+  padding: 1rem 1.05rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-width: 0;
+  overflow: hidden;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s;
+}
+
+.ch-ach.is-unlocked {
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--ch-accent) 12%, transparent),
+    var(--ch-card) 60%
+  );
+  border-color: color-mix(in srgb, var(--ch-accent) 35%, transparent);
+}
+
+.ch-ach.is-unlocked::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--ch-accent);
+  opacity: 0.75;
+}
+
+.ch-ach:hover {
+  background-color: var(--ch-card-hover);
+  border-color: var(--ch-border-strong);
+}
+
+.ch-ach-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.ch-ach-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  font-size: 1.3rem;
+}
+
+.ch-ach.is-locked .ch-ach-icon {
+  filter: grayscale(1);
+  opacity: 0.55;
+  background: var(--ch-inset);
+  border-color: var(--ch-border);
+}
+
+.ch-ach-lock {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.ch-ach-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ch-ach-name {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ch-ach.is-locked .ch-ach-name {
+  color: var(--ch-muted);
+}
+
+.ch-ach-desc {
+  font-size: 0.8rem;
+  color: var(--ch-faint);
+  margin-top: 0.15rem;
+  line-height: 1.4;
+}
+
+.ch-tier {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ch-accent);
+  background: color-mix(in srgb, var(--ch-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ch-accent) 30%, transparent);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+}
+
+.ch-ach.is-locked .ch-tier {
+  opacity: 0.6;
+}
+
+.ch-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ch-inset);
+  border: 1px solid var(--ch-border);
+  overflow: hidden;
+}
+
+.ch-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ch-accent);
+  transition: width 0.6s ease;
+}
+
+.ch-ach.is-locked .ch-bar-fill {
+  opacity: 0.65;
+}
+
+.ch-ach-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--ch-faint);
+}
+
+.ch-ach-done {
+  color: var(--ch-accent);
+  font-weight: 600;
+}
+
+/* ===== Unlock popup ===== */
+.ch-toasts {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  pointer-events: none;
+}
+
+.ch-toast {
+  --ch-accent: var(--ch-amber);
+  pointer-events: auto;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: 320px;
+  max-width: calc(100vw - 2.5rem);
+  padding: 0.85rem 1rem;
+  color: var(--ch-text);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--ch-accent) 18%, transparent),
+      transparent 65%
+    ),
+    #1b2128;
+  border: 1px solid color-mix(in srgb, var(--ch-accent) 45%, transparent);
+  border-radius: var(--ch-radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 0.3s,
+    transform 0.3s;
+}
+
+.ch-toast.is-shown {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ch-toast.is-leaving {
+  opacity: 0;
+  transform: translateX(24px);
+}
+
+.ch-toast-icon {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 1.3rem;
+  background: color-mix(in srgb, var(--ch-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ch-accent) 30%, transparent);
+}
+
+.ch-toast-text {
+  min-width: 0;
+}
+
+.ch-toast-kicker {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ch-accent);
+}
+
+.ch-toast-name {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ch-toast-desc {
+  font-size: 0.8rem;
+  color: var(--ch-muted);
+}
+
+@media (max-width: 600px) {
+  .ch {
+    gap: 2rem;
+    padding: 0 0.25rem 6rem;
+  }
+
+  .ch-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ch-stat-value {
+    font-size: 1.45rem;
+  }
+}

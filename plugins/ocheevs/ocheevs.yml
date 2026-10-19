@@ -1,0 +1,28 @@
+name: O Cheevs
+description: Adds achievements to Stashapp
+version: 0.2
+url:
+ui:
+  css:
+    - ocheevs.css
+  javascript:
+    - ocheevs.js
+  assets:
+    /: .
+settings:
+  01_hideNavButton:
+    displayName: Hide Navbar Button
+    type: BOOLEAN
+    description: Hides the trophy button next to the Stats button in the top bar. The achievements page is still at /plugins/cheevs. Default false.
+  02_hideUnlockPopups:
+    displayName: Hide Unlock Popups
+    type: BOOLEAN
+    description: Hides the popup that shows in the corner when you unlock an achievement. Default false.
+
+exec:
+  - python
+  - '{pluginDir}/cheevs_data.py'
+interface: raw
+tasks:
+  - name: saveCheevsData
+    description: Used by O Cheevs to save your achievement progress. You don't need to run this yourself.
