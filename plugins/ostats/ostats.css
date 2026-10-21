@@ -240,7 +240,8 @@ a.os-stat:hover {
 .os-highlights {
   display: grid;
   gap: 0.9rem;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* Narrow enough for all five highlights in one row */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
 .os-highlight {
@@ -278,6 +279,11 @@ a.os-stat:hover {
 
 .os-highlight:hover .os-highlight-media img {
   transform: scale(1.04);
+}
+
+/* Images are shown whole, so portrait ones aren't cropped */
+.os-highlight-media img.is-image {
+  object-fit: contain;
 }
 
 .os-highlight-media::after {
@@ -837,6 +843,10 @@ a.os-stat:hover {
   border-radius: 6px;
   flex-shrink: 0;
   background: #000;
+}
+
+.os-video img.is-image {
+  object-fit: contain;
 }
 
 .os-video-info {

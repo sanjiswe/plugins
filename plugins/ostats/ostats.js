@@ -142,6 +142,55 @@
     return scenes
   }
 
+  // Images with an O, for the image O stats. A failure only leaves them
+  // out.
+  async function getImagesWithOs() {
+    try {
+      const data = await callGQL({
+        query: `query {
+          findImages(
+            image_filter: { o_counter: { value: 0, modifier: GREATER_THAN } }
+            filter: { per_page: -1 }
+          ) {
+            images {
+              id
+              title
+              o_counter
+              files { basename }
+              paths { thumbnail }
+            }
+          }
+        }`,
+      })
+      return (data.findImages?.images || []).map((image) => ({
+        id: image.id,
+        title: image.title || null,
+        o_counter: image.o_counter || 0,
+        files: [{ basename: image.files?.[0]?.basename || '' }],
+        paths: { thumbnail: image.paths?.thumbnail || '' },
+      }))
+    } catch (e) {
+      console.error('[OStats] Failed to load images:', e)
+      return []
+    }
+  }
+
+  // Each saved image O with its image: [{ image, time }]. Images that are
+  // gone or back to no O's are left out.
+  function getImageOEvents(images, imageOHistory) {
+    const imagesById = new Map(images.map((image) => [image.id, image]))
+    const events = []
+    Object.keys(imageOHistory).forEach((imageId) => {
+      const image = imagesById.get(imageId)
+      if (!image) return
+      imageOHistory[imageId].forEach((timestamp) => {
+        const time = new Date(timestamp)
+        if (!isNaN(time.getTime())) events.push({ image, time })
+      })
+    })
+    return events
+  }
+
   // ===== PAGE CHANGES =====
   // Stash is a single-page app, so pages change without a reload. One
   // watcher, run at most every 100ms, handles every page O Stats cares
@@ -179,7 +228,7 @@
   // the player's own progress, so pauses, buffering, seeking and a computer
   // sleeping mid-video aren't counted. Seconds are collected here and sent
   // every minute, and whenever playback stops or the page is left; the
-  // server adds them to the day's total (save_watch_data.py).
+  // server adds them to the day's total (osaver.py).
 
   const SAVE_INTERVAL_MS = 60000
 
@@ -296,20 +345,125 @@
   })
   window.addEventListener('pagehide', () => saveWatchTime({ keepalive: true }))
 
-  // The stats page reads the file directly; it is served as a plugin asset
-  async function loadWatchTimeData() {
-    try {
-      const response = await fetch(
-        `/plugin/ostats/assets/watch_data.json?t=${Date.now()}`,
-        { cache: 'no-store' },
-      )
-      if (response.status === 404) return {}
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      return await response.json()
-    } catch (e) {
-      console.error('[OStats] Failed to load watch time:', e)
-      return {}
+  // ===== IMAGE O TRACKING =====
+  // Stash keeps the time of each O on a scene, but only a count for images,
+  // so O Stats saves the time of each image O itself (osaver.py). Stash's
+  // own requests that change an image's O count are watched, so the O
+  // button works the same on the image page, in the lightbox or anywhere
+  // else. Each change is saved once Stash confirms it.
+  const IMAGE_O_MUTATION = /\bimage(Increment|Decrement|Reset)O\b/
+  const IMAGE_O_ACTIONS = { Increment: 'add', Decrement: 'remove', Reset: 'reset' }
+  const IMAGE_O_RETRY_MS = 5000
+
+  // Changes are saved one at a time in click order, so a quick add then
+  // remove can't be saved the other way round. Each click takes its place
+  // in line straight away and is sent once Stash confirms it; one Stash
+  // turns down is dropped. A failed save is retried and holds back the
+  // ones after it.
+  const pendingImageOs = []
+  let sendingImageOs = false
+
+  function queueImageO(imageId, action, time) {
+    const change = { image_id: String(imageId), action, time, confirmed: false }
+    pendingImageOs.push(change)
+    return {
+      confirm() {
+        debugLog(`Image ${imageId}: ${action} O confirmed by Stash`)
+        change.confirmed = true
+        sendImageOs()
+      },
+      drop(reason) {
+        console.warn(`[OStats] Image ${imageId}: ${action} O not saved:`, reason)
+        const index = pendingImageOs.indexOf(change)
+        if (index !== -1) pendingImageOs.splice(index, 1)
+        sendImageOs()
+      },
     }
+  }
+
+  async function sendImageOs() {
+    if (sendingImageOs) return
+    sendingImageOs = true
+    try {
+      while (pendingImageOs[0]?.confirmed) {
+        const { confirmed, ...change } = pendingImageOs[0]
+        const count = await runPluginOperation({ mode: 'image_o', ...change })
+        pendingImageOs.shift()
+        debugLog(`Image ${change.image_id}: ${change.action} O (${count} saved)`)
+      }
+    } catch (err) {
+      console.error('[OStats] Failed to save image O, retrying:', err)
+      setTimeout(sendImageOs, IMAGE_O_RETRY_MS)
+    } finally {
+      sendingImageOs = false
+    }
+  }
+
+  const originalFetch = window.fetch
+  window.fetch = function (input, init) {
+    const request = originalFetch.apply(this, arguments)
+    try {
+      const body = typeof init?.body === 'string' ? init.body : ''
+      const match = body.includes('image') && IMAGE_O_MUTATION.exec(body)
+      if (match) {
+        const { variables } = JSON.parse(body)
+        const action = IMAGE_O_ACTIONS[match[1]]
+        // The time of the click, not of Stash's reply
+        const time = new Date().toISOString()
+        debugLog(`Image ${variables?.id}: ${action} O clicked`)
+        if (variables?.id) {
+          const change = queueImageO(variables.id, action, time)
+          request
+            .then(async (response) => {
+              if (!response.ok) {
+                change.drop(`Stash replied ${response.status}`)
+                return
+              }
+              // Stash only reports a failed change inside the reply. If
+              // the reply can't be read (another script on the page may
+              // have read it first), Stash's OK is enough.
+              let result = null
+              try {
+                result = await response.clone().json()
+              } catch (e) {
+                debugLog("Couldn't read Stash's reply, saving anyway:", e)
+              }
+              if (result?.errors) change.drop(result.errors[0]?.message)
+              else change.confirm()
+            })
+            .catch((err) => change.drop(err))
+        }
+      }
+    } catch (e) {
+      debugLog('Could not read a GraphQL request:', e)
+    }
+    return request
+  }
+
+  // The stats page reads the data file directly; it is served as a plugin
+  // asset. Until the first save after updating, there is only the older
+  // watch_data.json, which holds the watch time alone.
+  async function loadOData() {
+    try {
+      for (const file of ['odata.json', 'watch_data.json']) {
+        const response = await fetch(
+          `/plugin/ostats/assets/${file}?t=${Date.now()}`,
+          { cache: 'no-store' },
+        )
+        if (response.status === 404) continue
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = await response.json()
+        return file === 'odata.json'
+          ? {
+              watchTime: data.watch_time || {},
+              imageOHistory: data.image_o_history || {},
+            }
+          : { watchTime: data, imageOHistory: {} }
+      }
+    } catch (e) {
+      console.error('[OStats] Failed to load O Stats data:', e)
+    }
+    return { watchTime: {}, imageOHistory: {} }
   }
 
 
@@ -333,6 +487,13 @@
     return section
   }
 
+  // Link that opens in a new tab, like the On This Day markers and list
+  function openInNewTab(link, href) {
+    link.href = href
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+  }
+
   // Stat card: icon chip, big value, label and an optional sub line.
   // Returns the sub line element so callers can add links to it.
   function createStatCard(
@@ -340,7 +501,7 @@
     { icon, value, label, sub, accent, tooltip, href },
   ) {
     const card = createEl(href ? 'a' : 'div', 'os-card os-stat')
-    if (href) card.href = href
+    if (href) openInNewTab(card, href)
     if (accent) card.style.setProperty('--os-accent', accent)
     if (tooltip) card.title = tooltip
 
@@ -355,16 +516,17 @@
     return subEl
   }
 
-  // Scene highlight card: cover image with the value and label on top and
-  // the scene title underneath. Links to the scene.
-  function createHighlightCard(container, scene, value, label, accent) {
+  // Highlight card: cover image with the value and label on top and the
+  // title underneath. Links to the scene or image (see highlightOf).
+  function createHighlightCard(container, item, value, label, accent) {
     const card = createEl('a', 'os-card os-highlight')
-    card.href = `/scenes/${scene.id}`
+    openInNewTab(card, item.href)
     if (accent) card.style.setProperty('--os-accent', accent)
 
     const media = createEl('div', 'os-highlight-media')
-    const img = createEl('img')
-    img.src = scene.paths.screenshot
+    // Images are shown whole, so portrait ones aren't cropped
+    const img = createEl('img', item.isImage ? 'is-image' : '')
+    img.src = item.cover
     img.loading = 'lazy'
     img.alt = ''
     media.appendChild(img)
@@ -375,14 +537,34 @@
     media.appendChild(overlay)
     card.appendChild(media)
 
-    card.appendChild(createEl('div', 'os-highlight-title', getSceneTitle(scene)))
+    card.appendChild(createEl('div', 'os-highlight-title', item.title))
     container.appendChild(card)
+  }
+
+  // What a highlight card shows for a scene or an image
+  function highlightOf({ scene, image }) {
+    return scene
+      ? {
+          href: `/scenes/${scene.id}`,
+          cover: scene.paths.screenshot,
+          title: getSceneTitle(scene),
+        }
+      : {
+          href: `/images/${image.id}`,
+          cover: image.paths.thumbnail,
+          title: getImageTitle(image),
+          isImage: true,
+        }
   }
 
   function getSceneTitle(scene) {
     return (
       scene.title || (scene.files && scene.files[0]?.basename) || 'Untitled'
     )
+  }
+
+  function getImageTitle(image) {
+    return image.title || image.files[0]?.basename || `Image ${image.id}`
   }
 
   // "1h 5m", "12m", "40s"
@@ -478,17 +660,17 @@
     subEl.appendChild(dateLink)
   }
 
-  function openSceneInNewTab(sceneId) {
-    window.open(`/scenes/${sceneId}`, '_blank', 'noopener,noreferrer')
-  }
-
   // O history by day, built once and shared by every stat:
-  //   dayMap:    day -> [{ scene, time }]
-  //   dayTotals: day -> number of O's
-  //   lastO:     scene id -> time of that scene's latest O (ms)
-  function buildOHistoryDayMap(scenes) {
+  //   dayMap:         day -> [{ scene, time }]
+  //   imageDayMap:    day -> [{ image, time }] (empty with Hide Image O's)
+  //   dayTotals:      day -> number of O's, image O's included
+  //   sceneDayTotals: day -> number of scene O's
+  //   lastO:          scene id -> time of that scene's latest O (ms)
+  function buildOHistoryDayMap(scenes, imageOEvents = []) {
     const dayMap = new Map()
+    const imageDayMap = new Map()
     const dayTotals = {}
+    const sceneDayTotals = {}
     const lastO = new Map()
 
     scenes.forEach((scene) => {
@@ -501,6 +683,7 @@
         if (!dayMap.has(day)) dayMap.set(day, [])
         dayMap.get(day).push({ scene, time })
         dayTotals[day] = (dayTotals[day] || 0) + 1
+        sceneDayTotals[day] = (sceneDayTotals[day] || 0) + 1
 
         if (time.getTime() > (lastO.get(scene.id) || 0)) {
           lastO.set(scene.id, time.getTime())
@@ -508,7 +691,14 @@
       })
     })
 
-    return { dayMap, dayTotals, lastO }
+    imageOEvents.forEach(({ image, time }) => {
+      const day = getLocalDateString(time)
+      if (!imageDayMap.has(day)) imageDayMap.set(day, [])
+      imageDayMap.get(day).push({ image, time })
+      dayTotals[day] = (dayTotals[day] || 0) + 1
+    })
+
+    return { dayMap, imageDayMap, dayTotals, sceneDayTotals, lastO }
   }
 
   // orgasms today
@@ -588,7 +778,7 @@
     }
   }
 
-  // Export/Import watch time data as JSON
+  // Export/Import the data file (watch time and image O's) as JSON
   function createWatchTimeExportButton(row, oHistoryCache) {
     const container = createEl('div', 'os-toolbar')
     row.appendChild(container)
@@ -602,27 +792,33 @@
       jsonBtn.innerText = '⏳ Exporting...'
 
       try {
-        const watchTimeData = await loadWatchTimeData()
+        const { watchTime: watchTimeData, imageOHistory } = await loadOData()
 
-        // Watch time and O count per day
+        // Watch time and scene O count per day
         const cleanedData = {}
         Object.keys(watchTimeData)
           .sort()
           .forEach((day) => {
             cleanedData[day] = {
               seconds: getWatchSeconds(watchTimeData[day]),
-              o_count: oHistoryCache.dayTotals[day] || 0,
+              o_count: oHistoryCache.sceneDayTotals[day] || 0,
             }
           })
 
-        // Create JSON with metadata
+        // Create JSON with metadata. Image O's are saved even with Hide
+        // Image O's on.
         const exportData = {
-          version: '3.0',
+          version: '4.0',
           exported: new Date().toISOString(),
           data: cleanedData,
+          image_o_history: imageOHistory,
           totalDays: Object.keys(cleanedData).length,
           totalSeconds: Object.values(cleanedData).reduce(
             (sum, dayData) => sum + dayData.seconds,
+            0,
+          ),
+          totalImageOs: Object.values(imageOHistory).reduce(
+            (sum, times) => sum + times.length,
             0,
           ),
         }
@@ -634,7 +830,7 @@
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = `ostats-watch-time-${getTodayDate()}.json`
+        a.download = `ostats-data-${getTodayDate()}.json`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -662,7 +858,7 @@
     // Help icon with tooltip (on the right)
     const helpIcon = createEl('div', 'os-help', '?')
     helpIcon.title =
-      'Watch time data is stored on your Stash server and syncs across all devices. Use Export to backup your data to a JSON file and Import to restore it.'
+      "Watch time and the times of image O's are stored on your Stash server and sync across all devices. Use Export to backup your data to a JSON file and Import to restore it."
     container.appendChild(helpIcon)
 
     importBtn.addEventListener('click', () => {
@@ -681,26 +877,33 @@
           const text = await file.text()
           const importData = JSON.parse(text)
 
-          // Exports wrap the days in "data"; very old backups are just the
-          // days. The server reads every format O Stats has exported
-          // ({ seconds, o_count }, "seconds,oCount" and plain numbers) and
-          // keeps only the watch time; O counts come from Stash itself.
-          const days =
-            importData.data && typeof importData.data === 'object'
-              ? importData.data
-              : importData
-          if (!days || typeof days !== 'object' || Array.isArray(days)) {
+          // The server reads every format O Stats has exported: days under
+          // "data" ({ seconds, o_count }, "seconds,oCount" or plain
+          // numbers), very old backups that are just the days, and image
+          // O's beside the days (export 4.0). O counts per day come from
+          // Stash itself, so only the watch time is kept from the days.
+          if (
+            !importData ||
+            typeof importData !== 'object' ||
+            Array.isArray(importData)
+          ) {
             throw new Error('Invalid file format')
           }
 
-          // Replaces all watch time with the file's
-          const importedDays = await runPluginOperation({
+          // Replaces all watch time with the file's, and the image O's too
+          // when the file has them (older exports don't)
+          const imported = await runPluginOperation({
             mode: 'save',
-            watch_data: JSON.stringify(days),
+            o_data: JSON.stringify(importData),
           })
-          if (!importedDays) throw new Error('No days found in the file')
+          if (!imported?.days && !imported?.image_os) {
+            throw new Error('Nothing to import found in the file')
+          }
 
-          importBtn.innerText = `✓ Imported ${importedDays} days`
+          importBtn.innerText =
+            imported.image_os === null
+              ? `✓ Imported ${imported.days} days`
+              : `✓ Imported ${imported.days} days, ${imported.image_os} image O's`
           // Reload to show the imported data
           setTimeout(() => window.location.reload(), 1000)
         } catch (error) {
@@ -918,17 +1121,19 @@
       totalWatchTimeSeconds += getWatchSeconds(dayData)
     })
 
-    // Count total O's only from first watch day onward using cache
+    // Count total O's only from first watch day onward using cache. Image
+    // O's have no watch time, so only scene O's count.
+    const { sceneDayTotals } = oHistoryCache
     let totalOs = 0
     if (firstWatchDay) {
-      Object.keys(oHistoryCache.dayTotals).forEach((day) => {
+      Object.keys(sceneDayTotals).forEach((day) => {
         if (day >= firstWatchDay) {
-          totalOs += oHistoryCache.dayTotals[day]
+          totalOs += sceneDayTotals[day]
         }
       })
     } else {
       // If no watch history, count all O's
-      Object.values(oHistoryCache.dayTotals).forEach((count) => {
+      Object.values(sceneDayTotals).forEach((count) => {
         totalOs += count
       })
     }
@@ -988,7 +1193,7 @@
     if (maxScene) {
       createHighlightCard(
         row,
-        maxScene,
+        highlightOf({ scene: maxScene }),
         `${maxCount} O's`,
         "Most O's",
         'var(--os-blue)',
@@ -1023,7 +1228,7 @@
       }
       createHighlightCard(
         row,
-        maxScene,
+        highlightOf({ scene: maxScene }),
         timeStr,
         'Longest Played',
         'var(--os-green)',
@@ -1052,7 +1257,7 @@
     if (!result) return
     createHighlightCard(
       row,
-      result.scene,
+      highlightOf(result),
       formatTimeAgo(result.time),
       'Most Recent O',
       'var(--os-purple)',
@@ -1065,10 +1270,27 @@
     if (!result) return
     createHighlightCard(
       row,
-      result.scene,
+      highlightOf(result),
       formatTimeAgo(result.time),
       'Oldest O',
       'var(--os-amber)',
+    )
+  }
+
+  // image with most orgasms (Stash's count, so O's from before O Stats
+  // saved image O's count too)
+  function createMostOImage(row, images) {
+    let maxImage = null
+    images.forEach((image) => {
+      if (image.o_counter > (maxImage?.o_counter || 0)) maxImage = image
+    })
+    if (!maxImage) return
+    createHighlightCard(
+      row,
+      highlightOf({ image: maxImage }),
+      `${maxImage.o_counter} O${maxImage.o_counter === 1 ? '' : "'s"}`,
+      "Image with Most O's",
+      'var(--os-orange)',
     )
   }
 
@@ -1843,6 +2065,10 @@
       const dayOs = (oHistoryCache.dayMap.get(targetDay) || [])
         .map(({ scene, time }) => ({ scene, time }))
         .sort((a, b) => a.time - b.time)
+      // The day's image O's; none with Hide Image O's
+      const dayImageOs = (oHistoryCache.imageDayMap.get(targetDay) || [])
+        .slice()
+        .sort((a, b) => a.time - b.time)
 
       // Everything watched that day: each O, plus plays that aren't within
       // 30 minutes of an O or another play of the same scene
@@ -2040,12 +2266,20 @@
         timelineViz.appendChild(hourLabel)
       }
 
-      // Timeline markers: blue for O's, gray for watches without an O.
-      // Both are sorted together so they alternate sides by time.
+      // Timeline markers: blue for O's, orange for image O's, gray for
+      // watches without an O. All are sorted together so they alternate
+      // sides by time.
       const timelineEvents = [
         ...(hideTimelineOs
           ? []
           : dayOs.map((o) => ({ time: o.time, scene: o.scene, isO: true }))),
+        ...(hideTimelineOs
+          ? []
+          : dayImageOs.map((o) => ({
+              time: o.time,
+              image: o.image,
+              isO: true,
+            }))),
         ...(showTimelineWatches
           ? daySceneEvents
               .filter((event) => !event.hasO)
@@ -2058,10 +2292,17 @@
       ].sort((a, b) => a.time - b.time)
 
       timelineEvents.forEach((event, index) => {
-        const color = event.isO ? 'var(--os-blue)' : 'var(--os-gray)'
-        const glow = event.isO
-          ? 'rgba(76, 141, 255, 0.55)'
-          : 'rgba(138, 148, 166, 0.45)'
+        const color = event.image
+          ? 'var(--os-orange)'
+          : event.isO
+            ? 'var(--os-blue)'
+            : 'var(--os-gray)'
+        const glow = event.image
+          ? 'rgba(255, 138, 61, 0.55)'
+          : event.isO
+            ? 'rgba(76, 141, 255, 0.55)'
+            : 'rgba(138, 148, 166, 0.45)'
+        const item = highlightOf(event)
         const hour = event.time.getHours()
         const minute = event.time.getMinutes()
         const timePercent = ((hour * 60 + minute) / (24 * 60)) * 100
@@ -2103,7 +2344,8 @@
         tooltipHour = tooltipHour === 0 ? 12 : tooltipHour
         const tooltipAmpm = hour < 12 ? 'am' : 'pm'
         const tooltipMinute = minute.toString().padStart(2, '0')
-        marker.title = `${tooltipHour}:${tooltipMinute}${tooltipAmpm} - ${getSceneTitle(event.scene)}${event.isO ? '' : ' (watched)'}`
+        const note = event.image ? ' (image)' : event.isO ? '' : ' (watched)'
+        marker.title = `${tooltipHour}:${tooltipMinute}${tooltipAmpm} - ${item.title}${note}`
 
         // Thumbnail preview shown on hover, on the same side as the marker
         const thumbnailPreview = createEl('div')
@@ -2123,11 +2365,12 @@
           background: '#000',
         })
         const thumbnailImg = createEl('img')
-        thumbnailImg.src = event.scene.paths.screenshot
+        thumbnailImg.src = item.cover
         Object.assign(thumbnailImg.style, {
           width: '100%',
           height: '100%',
-          objectFit: 'cover',
+          // Images are shown whole, so portrait ones aren't cropped
+          objectFit: event.image ? 'contain' : 'cover',
           display: 'block',
         })
         thumbnailPreview.appendChild(thumbnailImg)
@@ -2144,40 +2387,47 @@
           thumbnailPreview.style.display = 'none'
         })
         marker.addEventListener('click', () => {
-          openSceneInNewTab(event.scene.id)
+          window.open(item.href, '_blank', 'noopener,noreferrer')
         })
 
         timelineViz.appendChild(marker)
       })
 
-      // Legend, only needed when both marker colors are on
+      // Legend, only needed when more than one marker color is on. Image
+      // O's count as on when there are any to show.
       const legend = createEl('div', 'os-legend')
-      if (!hideTimelineOs && showTimelineWatches) {
+      ;[
+        [!hideTimelineOs, 'var(--os-blue)', 'O'],
+        [
+          !hideTimelineOs && oHistoryCache.imageDayMap.size > 0,
+          'var(--os-orange)',
+          'Image O',
+        ],
+        [showTimelineWatches, 'var(--os-gray)', 'Watched'],
+      ].forEach(([shown, color, text]) => {
+        if (!shown) return
         const item = createEl('span')
         const dot = createEl('i')
-        dot.style.background = 'var(--os-blue)'
-        item.append(dot, 'O')
+        dot.style.background = color
+        item.append(dot, text)
         legend.appendChild(item)
-      }
-      if (!hideTimelineOs && showTimelineWatches) {
-        const item = createEl('span')
-        const dot = createEl('i')
-        dot.style.background = 'var(--os-gray)'
-        item.append(dot, 'Watched')
-        legend.appendChild(item)
-      }
-      if (legend.children.length > 0) timelineContainer.appendChild(legend)
+      })
+      if (legend.children.length > 1) timelineContainer.appendChild(legend)
 
-      // Right side: Video list
+      // Right side: everything viewed that day, scenes and image O's
       const videoListContainer = createEl('div')
       contentContainer.appendChild(videoListContainer)
 
       const uniqueScenes = new Set(daySceneEvents.map((event) => event.scene.id))
+      const viewedItems = [
+        ...daySceneEvents,
+        ...dayImageOs.map(({ image, time }) => ({ image, time, hasO: true })),
+      ].sort((a, b) => a.time - b.time)
 
       const videoListHead = createEl('div', 'os-panel-head')
-      const videoListTitle = createEl('h5', 'os-panel-title', 'Videos Watched')
+      const videoListTitle = createEl('h5', 'os-panel-title', 'Content Viewed')
       videoListTitle.appendChild(
-        createEl('span', 'os-count', String(daySceneEvents.length)),
+        createEl('span', 'os-count', String(viewedItems.length)),
       )
       videoListHead.appendChild(videoListTitle)
       videoListHead.appendChild(
@@ -2198,28 +2448,30 @@
       const targetDayWatchData = watchTimeData[targetDay]
       const watchTimeSeconds = getWatchSeconds(targetDayWatchData)
 
-      // Add videos to list
-      if (daySceneEvents.length === 0) {
+      // Add videos and images to list
+      if (viewedItems.length === 0) {
         videoList.appendChild(
-          createEl('div', 'os-empty', 'No videos watched on this day'),
+          createEl('div', 'os-empty', 'Nothing viewed on this day'),
         )
       } else {
-        daySceneEvents.forEach(({ scene, time, hasO }) => {
+        viewedItems.forEach(({ scene, image, time, hasO }) => {
+          const item = highlightOf({ scene, image })
           const videoItem = createEl('div', hasO ? 'os-video has-o' : 'os-video')
           videoItem.addEventListener('click', () => {
-            openSceneInNewTab(scene.id)
+            window.open(item.href, '_blank', 'noopener,noreferrer')
           })
           videoList.appendChild(videoItem)
 
-          const thumbnail = createEl('img')
-          thumbnail.src = scene.paths.screenshot
+          // Images are shown whole, so portrait ones aren't cropped
+          const thumbnail = createEl('img', image ? 'is-image' : '')
+          thumbnail.src = item.cover
           thumbnail.loading = 'lazy'
           thumbnail.alt = ''
           videoItem.appendChild(thumbnail)
 
           const infoContainer = createEl('div', 'os-video-info')
           infoContainer.appendChild(
-            createEl('div', 'os-video-title', getSceneTitle(scene)),
+            createEl('div', 'os-video-title', item.title),
           )
           videoItem.appendChild(infoContainer)
 
@@ -2232,8 +2484,8 @@
           const timeStr = `${hours}:${minutes.toString().padStart(2, '0')}${ampm}`
 
           // Check if this scene has watch time on this day
-          let watchTimeText = timeStr
-          if (targetDayWatchData && targetDayWatchData.videos) {
+          let watchTimeText = image ? `${timeStr} · Image` : timeStr
+          if (scene && targetDayWatchData && targetDayWatchData.videos) {
             const videoData = targetDayWatchData.videos.find(
               (v) => String(v.id) === String(scene.id),
             )
@@ -2265,7 +2517,7 @@
         summaryContainer.appendChild(stat)
       }
 
-      addSummaryStat(dayOs.length, "O's", 'var(--os-blue)')
+      addSummaryStat(dayOs.length + dayImageOs.length, "O's", 'var(--os-blue)')
       addSummaryStat(
         formatDuration(watchTimeSeconds),
         'Watch Time',
@@ -2273,7 +2525,8 @@
       )
       addSummaryStat(uniqueScenes.size, 'Videos Watched', 'var(--os-amber)')
 
-      // Average minutes per O for this day; only when there are O's
+      // Average minutes per O for this day; only when there are O's. Image
+      // O's have no watch time, so only scene O's count.
       if (dayOs.length > 0) {
         const avgMinPerO = watchTimeSeconds / 60 / dayOs.length
         let avgDisplayText = '0m'
@@ -2335,15 +2588,21 @@
     root.appendChild(hero)
 
     // Fast path: load lightweight stats data first.
-    const [settings, scenes, watchTimeData, libraryStats] = await Promise.all([
+    const [settings, scenes, oData, libraryStats] = await Promise.all([
       getPluginSettings(),
       getScenesWithOHistory(),
-      loadWatchTimeData(),
+      loadOData(),
       getLibraryStats(),
     ])
+    const watchTimeData = oData.watchTime
+    // Image O's are always saved, and shown unless Hide Image O's is on
+    const images = settings.hideImageOs ? [] : await getImagesWithOs()
 
     // OPTIMIZATION: Pre-process O history for faster lookups
-    const oHistoryCache = buildOHistoryDayMap(scenes)
+    const oHistoryCache = buildOHistoryDayMap(
+      scenes,
+      getImageOEvents(images, oData.imageOHistory),
+    )
 
     // Individual stats, skipped when their own setting is on. The whole-row
     // setting overrides these, so a hidden row never shows any of its stats.
@@ -2405,6 +2664,10 @@
             settings.hideSceneHighlightsOldestO,
             (row) => createOldestOScene(row, scenes, oHistoryCache),
           ],
+          [
+            settings.hideImageOs || settings.hideHighlightsMostOImage,
+            (row) => createMostOImage(row, images),
+          ],
         ].filter(([hidden]) => !hidden)
 
     // Sections are added in page order. A hidden section is never created,
@@ -2429,11 +2692,11 @@
     }
 
     if (sceneHighlights.length > 0) {
-      const section = createSection(root, 'Scene Highlights')
+      const section = createSection(root, 'Highlights')
       const grid = createEl('div', 'os-highlights')
       section.appendChild(grid)
       for (const [, create] of sceneHighlights) await create(grid)
-      // A highlight with no scene (no O's yet) adds nothing
+      // A highlight with nothing to show (no O's yet) adds nothing
       if (grid.children.length === 0) section.remove()
     }
 

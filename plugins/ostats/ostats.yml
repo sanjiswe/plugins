@@ -1,6 +1,6 @@
 name: O Stats
 description: Adds O stats to the stats page
-version: 2.1
+version: 2.2
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   css:
@@ -10,6 +10,10 @@ ui:
   assets:
     /: .
 settings:
+  00_hideImageOs:
+    displayName: "Hide Image O's"
+    type: BOOLEAN
+    description: Leaves O's on images out of the stats. When shown, they count toward O's Today, the streak, Most O's in One Day, the O graph and the O Calendar, appear as orange markers on the On This Day timeline and in its Content Viewed list, and get their own Image with Most O's highlight. Average min/O only counts O's on scenes, since images have no watch time. The time of every O on an image is saved even while this is on. Default false.
   01_hideTopStats:
     displayName: 'Hide Today Stats'
     type: BOOLEAN
@@ -47,25 +51,29 @@ settings:
     type: BOOLEAN
     description: Hides the Average min/O stat. Has no effect if Hide All Time & Records is on. Default false.
   07_hideSceneHighlights:
-    displayName: Hide Scene Highlights
+    displayName: Hide Highlights
     type: BOOLEAN
-    description: Hides the whole scene highlights row (scene with most O's, longest play duration, most recent O and oldest O). Default false.
+    description: Hides the whole Highlights row (scene with most O's, longest play duration, most recent O, oldest O and image with most O's). Default false.
   08_hideSceneHighlightsMostOs:
-    displayName: "[Scene Highlights Row] Hide Scene with Most O's"
+    displayName: "[Highlights] Hide Scene with Most O's"
     type: BOOLEAN
-    description: Hides the Scene with Most O's highlight. Has no effect if Hide Scene Highlights is on. Default false.
+    description: Hides the Scene with Most O's highlight. Has no effect if Hide Highlights is on. Default false.
   09_hideSceneHighlightsLongestPlay:
-    displayName: '[Scene Highlights Row] Hide Longest Play Duration'
+    displayName: '[Highlights] Hide Longest Play Duration'
     type: BOOLEAN
-    description: Hides the Longest Play Duration highlight. Has no effect if Hide Scene Highlights is on. Default false.
+    description: Hides the Longest Play Duration highlight. Has no effect if Hide Highlights is on. Default false.
   10_hideSceneHighlightsMostRecentO:
-    displayName: '[Scene Highlights Row] Hide Most Recent O'
+    displayName: '[Highlights] Hide Most Recent O'
     type: BOOLEAN
-    description: Hides the Most Recent O highlight. Has no effect if Hide Scene Highlights is on. Default false.
+    description: Hides the Most Recent O highlight. Has no effect if Hide Highlights is on. Default false.
   11_hideSceneHighlightsOldestO:
-    displayName: '[Scene Highlights Row] Hide Oldest O'
+    displayName: '[Highlights] Hide Oldest O'
     type: BOOLEAN
-    description: Hides the Oldest O highlight. Has no effect if Hide Scene Highlights is on. Default false.
+    description: Hides the Oldest O highlight. Has no effect if Hide Highlights is on. Default false.
+  11a_hideHighlightsMostOImage:
+    displayName: "[Highlights] Hide Image with Most O's"
+    type: BOOLEAN
+    description: Hides the Image with Most O's highlight. It never shows with Hide Image O's on. Has no effect if Hide Highlights is on. Default false.
   12_hideOGraph:
     displayName: Hide O Graph
     type: BOOLEAN
@@ -99,9 +107,9 @@ settings:
     type: BOOLEAN
     description: Shows the On This Day timeline taller by default so markers close together are easier to tell apart. You can still collapse it with the button. Default false.
   19_expandOnThisDayList:
-    displayName: '[On This Day] Expand Videos Watched List'
+    displayName: '[On This Day] Expand Content Viewed List'
     type: BOOLEAN
-    description: Shows the full Videos Watched list in the On This Day section by default instead of a shorter scrolling list. You can still collapse it with the button. Default false.
+    description: Shows the full Content Viewed list in the On This Day section by default instead of a shorter scrolling list. You can still collapse it with the button. Default false.
   20_hideOnThisDayStats:
     displayName: '[On This Day] Hide Stats'
     type: BOOLEAN
@@ -115,9 +123,9 @@ settings:
     type: BOOLEAN
     description: Hides the Export JSON and Import JSON buttons at the bottom of the page. Default false.
 
-# Run by the stats page and the scene player (runPluginOperation) to read
-# and save watch time; see save_watch_data.py
+# Run by the stats page, the scene player and image O's (runPluginOperation)
+# to read and save watch time and image O's; see osaver.py
 exec:
   - python
-  - '{pluginDir}/save_watch_data.py'
+  - '{pluginDir}/osaver.py'
 interface: raw
