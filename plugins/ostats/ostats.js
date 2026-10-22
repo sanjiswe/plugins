@@ -59,6 +59,23 @@
     }
   }
 
+  // ===== LAYOUT CHOICES =====
+  // Toggles on the page itself (side by side, list expanded) are remembered
+  // in this browser rather than saved as plugin settings.
+  function loadLayoutChoice(key) {
+    try {
+      return localStorage.getItem(key) === '1'
+    } catch (e) {
+      return false
+    }
+  }
+
+  function saveLayoutChoice(key, on) {
+    try {
+      localStorage.setItem(key, on ? '1' : '0')
+    } catch (e) {}
+  }
+
   // ===== SCENE DATA =====
   // Only scenes with an O or some play time matter to the stats, so the
   // rest of the library isn't downloaded.
@@ -1334,7 +1351,9 @@
     const nextBtn = createEl('button', 'os-btn os-btn-icon', '›')
     nextBtn.title = 'Next year'
     pager.append(prevBtn, periodLabel, nextBtn)
-    head.appendChild(pager)
+    const actions = createEl('div', 'os-chart-actions')
+    actions.appendChild(pager)
+    head.appendChild(actions)
     card.appendChild(head)
 
     // The grid scrolls sideways on narrow screens instead of shrinking
@@ -1478,11 +1497,8 @@
         grid.appendChild(monthLabel)
       }
 
-      let todayCell = null
-      days.forEach((day, i) => {
+      function createDayCell(day) {
         const cell = createEl('div', 'os-heatmap-cell')
-        cell.style.gridColumn = String(Math.floor(i / 7) + 2)
-        cell.style.gridRow = String((i % 7) + 2)
         if (day.isOutside) {
           // Days from the neighbouring years in the first and last week
           cell.classList.add('is-outside')
@@ -1496,12 +1512,48 @@
           cell.title = `${formatDayLong(day.date)}: ${formatValue(day.value)}`
           cell.addEventListener('click', () => openDayInOnThisDay(day.key))
         }
-        if (day.isToday) {
-          cell.classList.add('is-today')
-          todayCell = cell
-        }
+        if (day.isToday) cell.classList.add('is-today')
+        return cell
+      }
+
+      let todayCell = null
+      days.forEach((day, i) => {
+        const cell = createDayCell(day)
+        cell.style.gridColumn = String(Math.floor(i / 7) + 2)
+        cell.style.gridRow = String((i % 7) + 2)
+        if (day.isToday) todayCell = cell
         grid.appendChild(cell)
       })
+
+      // Side by side there isn't room for the year as one strip, so it's
+      // shown as twelve small months instead (ostats.css picks which)
+      const months = createEl('div', 'os-heatmap-months')
+      scroller.appendChild(months)
+      for (let month = 0; month < 12; month++) {
+        const block = createEl('div', 'os-heatmap-mini')
+        block.appendChild(
+          createEl(
+            'div',
+            'os-heatmap-mini-title',
+            new Date(year, month, 1).toLocaleDateString('en-US', {
+              month: 'short',
+            }),
+          ),
+        )
+        const monthGrid = createEl('div', 'os-heatmap-mini-grid')
+        block.appendChild(monthGrid)
+        days
+          .filter((day) => !day.isOutside && day.date.getMonth() === month)
+          .forEach((day, i) => {
+            const cell = createDayCell(day)
+            // Monday first, like the strip; the 1st sits under its weekday
+            if (i === 0) {
+              cell.style.gridColumnStart = String(((day.date.getDay() + 6) % 7) + 1)
+            }
+            monthGrid.appendChild(cell)
+          })
+        months.appendChild(block)
+      }
 
       // On narrow screens, start with today in view (or January for
       // past years)
@@ -1603,12 +1655,13 @@
     }
 
     render()
+    return { card, actions }
   }
 
   // O's per day
   function createOHeatmap(row, oHistoryCache) {
     const plural = (n) => `${n} O${n === 1 ? '' : "'s"}`
-    createCalendarHeatmap(row, {
+    return createCalendarHeatmap(row, {
       title: 'O Calendar',
       accent: 'var(--os-blue)',
       dayTotals: oHistoryCache.dayTotals,
@@ -1626,7 +1679,7 @@
     Object.keys(watchTimeData).forEach((day) => {
       dayTotals[day] = getWatchSeconds(watchTimeData[day])
     })
-    createCalendarHeatmap(row, {
+    return createCalendarHeatmap(row, {
       title: 'Watch Calendar',
       accent: 'var(--os-green)',
       dayTotals,
@@ -1789,8 +1842,10 @@
     titleWrap.appendChild(totalEl)
     head.appendChild(titleWrap)
 
+    const actions = createEl('div', 'os-chart-actions')
+    head.appendChild(actions)
     const switcher = createEl('div', 'os-segmented')
-    head.appendChild(switcher)
+    actions.appendChild(switcher)
     const viewButtons = {}
     ;[
       ['week', 'Week'],
@@ -1945,9 +2000,14 @@
       for (let i = 0; i < 4; i++) grid.appendChild(createEl('span'))
       plot.appendChild(grid)
 
+      // The busiest bar (the first, if tied) keeps its number when the
+      // month view is too narrow to show them all (see ostats.css)
+      const peak = data.find((item) => item.value > 0 && item.value === maxValue)
+
       data.forEach((item) => {
         const col = createEl('div', 'os-chart-col')
         if (item.isCurrent) col.classList.add('is-current')
+        if (item === peak) col.classList.add('is-peak')
         plot.appendChild(col)
 
         const barArea = createEl('div', 'os-chart-bar-area')
@@ -1986,11 +2046,12 @@
     }
 
     renderChart('week')
+    return { card, actions }
   }
 
   // O's per day
   async function createWeeklyBarChart(row, scenes, oHistoryCache) {
-    createBarChart(row, {
+    return createBarChart(row, {
       title: "O's",
       accent: 'var(--os-blue)',
       dayTotals: oHistoryCache.dayTotals,
@@ -2006,13 +2067,53 @@
       dayTotals[day] = getWatchSeconds(watchTimeData[day])
     })
 
-    createBarChart(row, {
+    return createBarChart(row, {
       title: 'Watch Time',
       accent: 'var(--os-green)',
       dayTotals,
       formatValue: formatDuration,
       formatTotal: (total) => `${formatDuration(total)} watched`,
     })
+  }
+
+  // The O and watch time versions of a chart or calendar, stacked or side
+  // by side. The toggle sits on the O card and its choice is remembered
+  // under storageKey; when one of the two is hidden the other is shown on
+  // its own, with no toggle.
+  const SIDE_BY_SIDE_ICON = `<svg viewBox="0 0 16 16" width="16" height="16"
+    fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+    <rect x="1.75" y="2.75" width="5.25" height="10.5" rx="1.5" />
+    <rect x="9" y="2.75" width="5.25" height="10.5" rx="1.5" />
+  </svg>`
+
+  async function createChartPair(parent, { storageKey, createO, createWatch }) {
+    if (!createO || !createWatch) {
+      if (createO) await createO(parent)
+      if (createWatch) await createWatch(parent)
+      return
+    }
+
+    const pair = createEl('div', 'os-pair')
+    parent.appendChild(pair)
+    const { actions } = await createO(pair)
+    await createWatch(pair)
+
+    const toggle = createEl('button', 'os-btn os-btn-icon os-pair-toggle')
+    toggle.type = 'button'
+    toggle.innerHTML = SIDE_BY_SIDE_ICON
+    function setSideBySide(on) {
+      pair.classList.toggle('is-side-by-side', on)
+      toggle.setAttribute('aria-pressed', String(on))
+      toggle.title = on ? 'Show stacked' : 'Show side by side'
+      toggle.setAttribute('aria-label', toggle.title)
+    }
+    toggle.addEventListener('click', () => {
+      const on = !pair.classList.contains('is-side-by-side')
+      setSideBySide(on)
+      saveLayoutChoice(storageKey, on)
+    })
+    setSideBySide(loadLayoutChoice(storageKey))
+    actions.appendChild(toggle)
   }
 
   async function createOnThisDaySection(
@@ -2024,8 +2125,6 @@
     const {
       watchTimeData = {},
       hideStats = false,
-      expandedByDefault = false,
-      timelineExpandedByDefault = false,
       hideTimelineOs = false,
       showTimelineWatches = false,
     } = options
@@ -2049,9 +2148,8 @@
 
     // Track selected day offset (0 = today, -1 = yesterday, etc.)
     let selectedDayOffset = 0
-    // Track expanded state of the video list and timeline
-    let isExpanded = expandedByDefault
-    let isTimelineExpanded = timelineExpandedByDefault
+    // Whether the Content Viewed list is expanded, remembered in this browser
+    let isExpanded = loadLayoutChoice('ostats_content_list_expanded')
 
     // Function to render the day
     async function renderDay(dayOffset) {
@@ -2164,35 +2262,18 @@
       const contentContainer = createEl('div', 'os-otd-body')
       mainContainer.appendChild(contentContainer)
 
-      // Expand / Collapse toggle used by both panels
-      function createExpandButton(expanded, onToggle) {
-        const button = createEl(
-          'button',
-          'os-btn',
-          expanded ? 'Collapse ▲' : 'Expand ▼',
-        )
-        button.addEventListener('click', onToggle)
-        return button
-      }
-
       // Left side: 24-hour timeline
       const timelineContainer = createEl('div')
       contentContainer.appendChild(timelineContainer)
 
       const timelineHead = createEl('div', 'os-panel-head')
       timelineHead.appendChild(createEl('h5', 'os-panel-title', 'Timeline'))
-      timelineHead.appendChild(
-        createExpandButton(isTimelineExpanded, () => {
-          isTimelineExpanded = !isTimelineExpanded
-          renderDay(selectedDayOffset)
-        }),
-      )
       timelineContainer.appendChild(timelineHead)
 
       // Timeline visualization. Everything is placed inside an inner track
       // with some padding so markers at midnight aren't cut off.
       const timelineBox = createEl('div', 'os-timeline')
-      timelineBox.style.height = isTimelineExpanded ? '600px' : '400px'
+      timelineBox.style.height = '400px'
       timelineContainer.appendChild(timelineBox)
       const timelineViz = createEl('div')
       Object.assign(timelineViz.style, {
@@ -2430,12 +2511,18 @@
         createEl('span', 'os-count', String(viewedItems.length)),
       )
       videoListHead.appendChild(videoListTitle)
-      videoListHead.appendChild(
-        createExpandButton(isExpanded, () => {
-          isExpanded = !isExpanded
-          renderDay(selectedDayOffset)
-        }),
+      // Expand / Collapse, remembered in this browser
+      const expandButton = createEl(
+        'button',
+        'os-btn',
+        isExpanded ? 'Collapse ▲' : 'Expand ▼',
       )
+      expandButton.addEventListener('click', () => {
+        isExpanded = !isExpanded
+        saveLayoutChoice('ostats_content_list_expanded', isExpanded)
+        renderDay(selectedDayOffset)
+      })
+      videoListHead.appendChild(expandButton)
       videoListContainer.appendChild(videoListHead)
 
       // Expanded shows the whole list; collapsed scrolls inside a short box.
@@ -2707,18 +2794,23 @@
       !settings.hideWatchCalendar
     if (showCharts) {
       const section = createSection(root, 'Activity')
-      if (!settings.hideOGraph) {
-        await createWeeklyBarChart(section, scenes, oHistoryCache)
-      }
-      if (!settings.hideWatchTimeGraph) {
-        await createWatchTimeBarChart(section, watchTimeData)
-      }
-      if (!settings.hideOCalendar) {
-        createOHeatmap(section, oHistoryCache)
-      }
-      if (!settings.hideWatchCalendar) {
-        createWatchHeatmap(section, watchTimeData)
-      }
+      await createChartPair(section, {
+        storageKey: 'ostats_graphs_side_by_side',
+        createO:
+          !settings.hideOGraph &&
+          ((row) => createWeeklyBarChart(row, scenes, oHistoryCache)),
+        createWatch:
+          !settings.hideWatchTimeGraph &&
+          ((row) => createWatchTimeBarChart(row, watchTimeData)),
+      })
+      await createChartPair(section, {
+        storageKey: 'ostats_calendars_side_by_side',
+        createO:
+          !settings.hideOCalendar && ((row) => createOHeatmap(row, oHistoryCache)),
+        createWatch:
+          !settings.hideWatchCalendar &&
+          ((row) => createWatchHeatmap(row, watchTimeData)),
+      })
     }
 
     let onThisDaySection = null
@@ -2754,8 +2846,6 @@
         await createOnThisDaySection(onThisDayBody, scenes, oHistoryCache, {
           watchTimeData,
           hideStats: settings.hideOnThisDayStats,
-          expandedByDefault: settings.expandOnThisDayList,
-          timelineExpandedByDefault: settings.expandOnThisDayTimeline,
           hideTimelineOs: settings.hideOnThisDayTimelineOs,
           showTimelineWatches: settings.showOnThisDayTimelineWatches,
         })

@@ -453,6 +453,13 @@ a.os-stat:hover {
   margin-bottom: 1rem;
 }
 
+.os-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .os-chart-title {
   margin: 0;
   font-size: 1.05rem;
@@ -583,6 +590,74 @@ a.os-stat:hover {
   visibility: hidden;
 }
 
+/* ===== Side by side =====
+   The O and watch time graphs (and calendars) in a pair, stacked or side
+   by side. Narrow screens always stack them. */
+.os-pair {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.os-pair.is-side-by-side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.os-pair-toggle[aria-pressed='true'] {
+  color: var(--os-accent);
+  border-color: color-mix(in srgb, var(--os-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--os-accent) 14%, transparent);
+}
+
+/* Half width: smaller bar values. The 31 bars of a month are too narrow
+   for all their numbers, so only the busiest day keeps one; hovering a bar
+   shows its number on a dark background, hiding the busiest day's while it
+   does. Narrow screens stack the pair, so these only apply when it is
+   really side by side. */
+@media (min-width: 861px) {
+  .os-pair.is-side-by-side .os-chart-value {
+    font-size: 0.68rem;
+  }
+
+  .os-pair.is-side-by-side .os-chart-plot.is-dense .os-chart-value {
+    display: none;
+  }
+
+  .os-pair.is-side-by-side .os-chart-plot.is-dense .os-chart-col.is-peak .os-chart-value,
+  .os-pair.is-side-by-side .os-chart-plot.is-dense .os-chart-col:hover .os-chart-value {
+    display: block;
+  }
+
+  .os-pair.is-side-by-side
+    .os-chart-plot.is-dense:has(.os-chart-col:hover .os-chart-value)
+    .os-chart-col.is-peak:not(:hover)
+    .os-chart-value {
+    display: none;
+  }
+
+  .os-pair.is-side-by-side .os-chart-plot.is-dense .os-chart-col:hover .os-chart-value {
+    position: relative;
+    z-index: 2;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    background: rgba(20, 26, 32, 0.95);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Half width: the calendar shows twelve small months instead of the strip */
+.os-pair.is-side-by-side .os-heatmap-grid {
+  display: none;
+}
+
+.os-pair.is-side-by-side .os-heatmap-months {
+  display: grid;
+}
+
+.os-pair.is-side-by-side .os-heatmap .os-pager-label {
+  min-width: 3.5rem;
+}
+
 /* ===== O Calendar ===== */
 .os-heatmap-scroll {
   overflow-x: auto;
@@ -611,6 +686,29 @@ a.os-stat:hover {
   color: var(--os-muted);
   white-space: nowrap;
   overflow: visible;
+}
+
+/* Twelve small months, used side by side */
+.os-heatmap-months {
+  display: none;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.75rem 0.9rem;
+}
+
+.os-heatmap-mini-title {
+  margin-bottom: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--os-muted);
+}
+
+.os-heatmap-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.os-heatmap-mini-grid .os-heatmap-cell {
+  border-radius: 2px;
 }
 
 .os-heatmap-cell {
@@ -751,6 +849,8 @@ a.os-stat:hover {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  /* As tall as the Expand button, so both panels start level */
+  min-height: 36px;
   margin-bottom: 0.6rem;
 }
 
@@ -922,6 +1022,22 @@ a.os-stat:hover {
 @media (max-width: 860px) {
   .os-otd-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .os-pair.is-side-by-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .os-pair.is-side-by-side .os-heatmap-grid {
+    display: grid;
+  }
+
+  .os-pair.is-side-by-side .os-heatmap-months {
+    display: none;
+  }
+
+  .os-pair-toggle {
+    display: none;
   }
 }
 

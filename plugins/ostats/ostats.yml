@@ -102,14 +102,6 @@ settings:
     displayName: '[On This Day] Show Watches On Timeline'
     type: BOOLEAN
     description: Shows gray markers on the On This Day timeline for videos you watched without an O. Hover to see the thumbnail, click to open the scene. Default false.
-  18_expandOnThisDayTimeline:
-    displayName: '[On This Day] Expand Timeline'
-    type: BOOLEAN
-    description: Shows the On This Day timeline taller by default so markers close together are easier to tell apart. You can still collapse it with the button. Default false.
-  19_expandOnThisDayList:
-    displayName: '[On This Day] Expand Content Viewed List'
-    type: BOOLEAN
-    description: Shows the full Content Viewed list in the On This Day section by default instead of a shorter scrolling list. You can still collapse it with the button. Default false.
   20_hideOnThisDayStats:
     displayName: '[On This Day] Hide Stats'
     type: BOOLEAN
