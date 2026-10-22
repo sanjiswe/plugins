@@ -2474,27 +2474,6 @@
         timelineViz.appendChild(marker)
       })
 
-      // Legend, only needed when more than one marker color is on. Image
-      // O's count as on when there are any to show.
-      const legend = createEl('div', 'os-legend')
-      ;[
-        [!hideTimelineOs, 'var(--os-blue)', 'O'],
-        [
-          !hideTimelineOs && oHistoryCache.imageDayMap.size > 0,
-          'var(--os-orange)',
-          'Image O',
-        ],
-        [showTimelineWatches, 'var(--os-gray)', 'Watched'],
-      ].forEach(([shown, color, text]) => {
-        if (!shown) return
-        const item = createEl('span')
-        const dot = createEl('i')
-        dot.style.background = color
-        item.append(dot, text)
-        legend.appendChild(item)
-      })
-      if (legend.children.length > 1) timelineContainer.appendChild(legend)
-
       // Right side: everything viewed that day, scenes and image O's
       const videoListContainer = createEl('div')
       contentContainer.appendChild(videoListContainer)

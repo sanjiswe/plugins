@@ -875,27 +875,6 @@ a.os-stat:hover {
   background: var(--os-inset);
 }
 
-.os-legend {
-  display: flex;
-  gap: 0.9rem;
-  font-size: 0.75rem;
-  color: var(--os-muted);
-  margin-top: 0.55rem;
-}
-
-.os-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.os-legend i {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
 .os-videos {
   border: 1px solid var(--os-border);
   border-radius: var(--os-radius-sm);
