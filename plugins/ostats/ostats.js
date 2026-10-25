@@ -110,7 +110,17 @@
       o_history: Array.isArray(scene.o_history) ? scene.o_history : [],
       play_duration: scene.play_duration || 0,
       last_played_at: scene.last_played_at || null,
+      play_count: scene.play_count || 0,
       play_history: [],
+      performers: (scene.performers || []).map(({ id, name, image_path }) => ({
+        id,
+        name,
+        image_path,
+      })),
+      tags: (scene.tags || []).map(({ id, name }) => ({ id, name })),
+      studio: scene.studio
+        ? { id: scene.studio.id, name: scene.studio.name }
+        : null,
       files: [{ basename: scene.files?.[0]?.basename || '' }],
       paths: { screenshot: scene.paths?.screenshot || '' },
     }
@@ -128,6 +138,10 @@
             o_history
             play_duration
             last_played_at
+            play_count
+            performers { id name image_path }
+            tags { id name }
+            studio { id name }
             files { basename }
             paths { screenshot }
           }
@@ -1474,8 +1488,11 @@
       const metric = metrics[key]
       const current = metric.measure(soFar(thisWeek))
       const last = metric.measure(soFar(lastWeek))
-      const { days: earlierDays, weeks: earlierWeeks, weekList } =
-        metric.earlier
+      const {
+        days: earlierDays,
+        weeks: earlierWeeks,
+        weekList,
+      } = metric.earlier
       let usual = null
       if (earlierWeeks > 0) {
         if (metric.isRatio) {
@@ -1612,7 +1629,9 @@
         perWeek: true,
         measure: (days) => {
           const ids = new Set()
-          days.forEach((day) => videosByDay.get(day)?.forEach((id) => ids.add(id)))
+          days.forEach((day) =>
+            videosByDay.get(day)?.forEach((id) => ids.add(id)),
+          )
           return ids.size
         },
         format: formatCount,
@@ -1630,6 +1649,169 @@
       addTotal: startWeekPart,
       addVideos,
     }
+  }
+
+  // ===== WHAT WORKS FOR YOU =====
+  // Your top performers, tags and studios, by O's or by views. A scene's
+  // O's and views count for each performer and tag in it, and its studio.
+  // Three rows of three (see .os-works-list)
+  const WHAT_WORKS_ROWS = 9
+
+  // A play, or an O on a scene with no play logged
+  function getViews(scene) {
+    return Math.max(scene.play_count, scene.o_counter > 0 ? 1 : 0)
+  }
+
+  function createWhatWorks(parent, scenes) {
+    let totalOs = 0
+    let totalViews = 0
+    const groups = {
+      performers: new Map(),
+      tags: new Map(),
+      studios: new Map(),
+    }
+    function count(map, entity, scene) {
+      if (!map.has(entity.id)) {
+        map.set(entity.id, { ...entity, os: 0, views: 0 })
+      }
+      const entry = map.get(entity.id)
+      entry.os += scene.o_counter
+      entry.views += getViews(scene)
+    }
+    scenes.forEach((scene) => {
+      totalOs += scene.o_counter
+      totalViews += getViews(scene)
+      scene.performers.forEach((performer) =>
+        count(groups.performers, performer, scene),
+      )
+      scene.tags.forEach((tag) => count(groups.tags, tag, scene))
+      if (scene.studio) count(groups.studios, scene.studio, scene)
+    })
+    if (totalOs === 0 && totalViews === 0) return
+    // "1 O", "3 O's", "2 views"
+    const plural = (n, word) =>
+      `${n} ${word}${n === 1 ? '' : word === 'O' ? "'s" : 's'}`
+
+    const card = createEl('div', 'os-card os-chart os-works')
+    card.style.setProperty('--os-accent', 'var(--os-blue)')
+    parent.appendChild(card)
+
+    const head = createEl('div', 'os-chart-head')
+    head.appendChild(createEl('h4', 'os-chart-title', 'What Works for You'))
+    const actions = createEl('div', 'os-chart-actions')
+    head.appendChild(actions)
+    card.appendChild(head)
+
+    const list = createEl('div', 'os-works-list')
+    card.appendChild(list)
+
+    let kind = 'performers'
+    let sort = 'os'
+    function addSwitcher(options, onPick) {
+      const switcher = createEl('div', 'os-segmented')
+      const buttons = options.map(([value, label]) => {
+        const button = createEl('button', '', label)
+        button.type = 'button'
+        button.dataset.value = value
+        button.addEventListener('click', () => {
+          onPick(value)
+          render()
+        })
+        switcher.appendChild(button)
+        return button
+      })
+      actions.appendChild(switcher)
+      return buttons
+    }
+    const kindButtons = addSwitcher(
+      [
+        ['performers', 'Performers'],
+        ['tags', 'Tags'],
+        ['studios', 'Studios'],
+      ],
+      (value) => (kind = value),
+    )
+    const sortButtons = addSwitcher(
+      [
+        ['os', "Most O's"],
+        ['views', 'Most Views'],
+      ],
+      (value) => (sort = value),
+    )
+
+    function render() {
+      kindButtons.forEach((b) =>
+        b.classList.toggle('is-active', b.dataset.value === kind),
+      )
+      sortButtons.forEach((b) =>
+        b.classList.toggle('is-active', b.dataset.value === sort),
+      )
+
+      // Ties go to the other count: fewer views for O's, more O's for views
+      const entries = [...groups[kind].values()]
+        .filter((entry) => entry[sort] > 0)
+        .sort((a, b) =>
+          sort === 'os'
+            ? b.os - a.os || a.views - b.views
+            : b.views - a.views || b.os - a.os,
+        )
+        .slice(0, WHAT_WORKS_ROWS)
+
+      list.innerHTML = ''
+      if (entries.length === 0) {
+        list.appendChild(
+          createEl(
+            'div',
+            'os-empty',
+            `No ${kind} with ${sort === 'os' ? 'an O' : 'a view'} yet`,
+          ),
+        )
+        return
+      }
+
+      entries.forEach((entry, index) => {
+        const row = createEl('a', 'os-works-row')
+        openInNewTab(row, `/${kind}/${entry.id}`)
+        row.title =
+          sort === 'os'
+            ? `${Math.round((entry.os / totalOs) * 100)}% of all your O's`
+            : `${Math.round((entry.views / totalViews) * 100)}% of all your views`
+
+        if (kind === 'performers' && entry.image_path) {
+          const avatar = createEl('img', 'os-works-avatar')
+          avatar.src = entry.image_path
+          avatar.loading = 'lazy'
+          avatar.alt = ''
+          row.appendChild(avatar)
+        } else {
+          row.appendChild(
+            createEl(
+              'span',
+              'os-works-avatar is-initial',
+              (entry.name || '?').charAt(0).toUpperCase(),
+            ),
+          )
+        }
+
+        const info = createEl('div', 'os-works-info')
+        const top = createEl('div', 'os-works-top')
+        top.appendChild(
+          createEl('span', 'os-works-name', entry.name || 'Unnamed'),
+        )
+        top.appendChild(createEl('span', 'os-works-rank', `#${index + 1}`))
+        info.appendChild(top)
+        info.appendChild(
+          createEl(
+            'div',
+            'os-works-meta',
+            `${plural(entry.os, 'O')} · ${plural(entry.views, 'view')}`,
+          ),
+        )
+        row.appendChild(info)
+        list.appendChild(row)
+      })
+    }
+    render()
   }
 
   // ===== CALENDARS =====
@@ -3011,8 +3193,8 @@
     const week = settings.hideThisWeek
       ? null
       : createWeekTrends(oHistoryCache, watchTimeData)
-    // Set when the Videos Watched card is shown with its week
-    let fillVideosWeek = null
+    // Things to fill in once play history has loaded (it loads last)
+    const afterPlayHistory = []
     const todayStats = settings.hideTopStats
       ? []
       : [
@@ -3036,7 +3218,7 @@
             (row) => createVideosWatchedToday(row, scenes, oHistoryCache),
             (card) => {
               // This week's count now; the days and comparisons once play
-              // history has loaded (fillVideosWeek, below)
+              // history has loaded
               const count = countVideosThisWeek(
                 scenes,
                 oHistoryCache,
@@ -3047,11 +3229,11 @@
                 String(count),
                 ` video${count === 1 ? '' : 's'} this week`,
               )
-              fillVideosWeek = () => {
+              afterPlayHistory.push(() => {
                 week.addVideos(scenes)
                 countOnly.remove()
                 week.addTo(card, 'videos')
-              }
+              })
             },
           ],
           [
@@ -3190,6 +3372,12 @@
       })
     }
 
+    if (!settings.hideWhatWorks) {
+      const section = createSection(root, 'What Works for You')
+      createWhatWorks(section, scenes)
+      if (section.children.length === 1) section.remove()
+    }
+
     let onThisDaySection = null
     if (!settings.hideOnThisDay) {
       onThisDaySection = createSection(root, 'On This Day')
@@ -3214,13 +3402,13 @@
 
     // Play history is loaded after everything else, for On This Day and the
     // Videos Watched card's week
-    if (!onThisDaySection && !fillVideosWeek) return
+    if (!onThisDaySection && afterPlayHistory.length === 0) return
     const playHistoryLoaded = addPlayHistory(scenes)
-    if (fillVideosWeek) {
+    if (afterPlayHistory.length > 0) {
       playHistoryLoaded
-        .then(fillVideosWeek)
+        .then(() => afterPlayHistory.forEach((fill) => fill()))
         .catch((err) =>
-          console.error("[OStats] Failed loading this week's videos:", err),
+          console.error('[OStats] Failed loading play history:', err),
         )
     }
     if (!onThisDaySection) return

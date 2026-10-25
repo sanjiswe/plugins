@@ -810,6 +810,98 @@ a.os-stat:hover {
   min-width: 3.5rem;
 }
 
+/* ===== What Works for You ===== */
+/* Three columns, so the top 9 fill three full rows; one on narrow screens */
+.os-works-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem 1.5rem;
+}
+
+@media (max-width: 860px) {
+  .os-works-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.os-works-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.5rem 0.55rem;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.15s;
+}
+
+.os-works-row:hover {
+  background: var(--os-card-hover);
+  color: inherit;
+  text-decoration: none;
+}
+
+.os-works-avatar {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 20%;
+  background: var(--os-inset);
+}
+
+/* Tags and studios: their first letter */
+.os-works-avatar.is-initial {
+  display: grid;
+  place-items: center;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--os-accent);
+  background: color-mix(in srgb, var(--os-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--os-accent) 30%, transparent);
+}
+
+.os-works-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.os-works-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.os-works-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* #1, #2 …: the top three in the section's colour */
+.os-works-rank {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--os-faint);
+}
+
+.os-works-row:nth-child(-n + 3) .os-works-rank {
+  color: var(--os-accent);
+}
+
+.os-works-meta {
+  margin-top: 0.1rem;
+  font-size: 0.75rem;
+  color: var(--os-muted);
+}
+
 /* ===== O Calendar ===== */
 .os-heatmap-scroll {
   overflow-x: auto;
@@ -1110,6 +1202,11 @@ a.os-stat:hover {
   text-align: center;
   color: var(--os-faint);
   font-size: 0.9rem;
+}
+
+/* A whole row, in place of the list rows */
+.os-works-list > .os-empty {
+  grid-column: 1 / -1;
 }
 
 .os-otd-stats {
