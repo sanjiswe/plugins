@@ -15,25 +15,33 @@ settings:
     type: BOOLEAN
     description: Leaves O's on images out of the stats. When shown, they count toward O's Today, the streak, Most O's in One Day, the O graph and the O Calendar, appear as orange markers on the On This Day timeline and in its Content Viewed list, and get their own Image with Most O's highlight. Average min/O only counts O's on scenes, since images have no watch time. The time of every O on an image is saved even while this is on. Default false.
   01_hideTopStats:
-    displayName: 'Hide Today Stats'
+    displayName: 'Hide Today & Weekly'
     type: BOOLEAN
-    description: Hides the whole Today row (O's today, streak, watch time today and videos watched today). Default false.
+    description: Hides the whole Today & Weekly row (O's, streak, watch time, videos watched and average min/O, today and this week). Default false.
   02_hideTopStatsOsToday:
-    displayName: "[Today] Hide O's Today"
+    displayName: "[Today & Weekly] Hide O's Today"
     type: BOOLEAN
-    description: Hides the O's Today stat. Has no effect if Hide Today Stats is on. Default false.
+    description: Hides the O's Today stat. Has no effect if Hide Today & Weekly is on. Default false.
   04_hideTopStatsStreak:
-    displayName: '[Today] Hide Streak'
+    displayName: '[Today & Weekly] Hide Streak'
     type: BOOLEAN
-    description: Hides the Streak stat. Has no effect if Hide Today Stats is on. Default false.
+    description: Hides the Streak stat. Has no effect if Hide Today & Weekly is on. Default false.
   04a_hideTodayWatchTime:
-    displayName: '[Today] Hide Watch Time Today'
+    displayName: '[Today & Weekly] Hide Watch Time Today'
     type: BOOLEAN
-    description: Hides the Watch Time Today stat. Has no effect if Hide Today Stats is on. Default false.
+    description: Hides the Watch Time Today stat. Has no effect if Hide Today & Weekly is on. Default false.
   04b_hideTodayVideosWatched:
-    displayName: '[Today] Hide Videos Watched Today'
+    displayName: '[Today & Weekly] Hide Videos Watched Today'
     type: BOOLEAN
-    description: Hides the Videos Watched Today stat. Has no effect if Hide Today Stats is on. Default false.
+    description: Hides the Videos Watched Today stat. Has no effect if Hide Today & Weekly is on. Default false.
+  04c_hideTodayAvgMinPerO:
+    displayName: '[Today & Weekly] Hide Avg min/O'
+    type: BOOLEAN
+    description: Hides the Avg min/O card (watch time per O today and this week). Has no effect if Hide Today & Weekly is on. Default false.
+  04d_hideThisWeek:
+    displayName: '[Today & Weekly] Hide This Week'
+    type: BOOLEAN
+    description: Shows only today in the Today & Weekly cards, without this week's totals, day-by-day bars and comparisons with last week and a usual week. Default false.
   06a_hideAllTimeStats:
     displayName: 'Hide All Time & Records'
     type: BOOLEAN

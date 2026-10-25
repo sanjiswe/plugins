@@ -236,6 +236,158 @@ a.os-stat:hover {
   font-size: 1.5rem;
 }
 
+/* ===== Today & Weekly ===== */
+/* All of Today's cards on one row (--os-cols is how many are shown);
+   three across on tablets, two on phones */
+.os-today-grid {
+  grid-template-columns: repeat(var(--os-cols, 4), minmax(0, 1fr));
+}
+
+@media (max-width: 1000px) {
+  .os-today-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* The Weekly toggle in the section heading turns the weekly parts off */
+.os-today-grid.is-weekly-hidden .os-week {
+  display: none;
+}
+
+.os-weekly-toggle {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--os-muted);
+}
+
+.os-weekly-toggle[aria-pressed='true'] {
+  color: var(--os-blue);
+  border-color: color-mix(in srgb, var(--os-blue) 60%, transparent);
+  background: color-mix(in srgb, var(--os-blue) 14%, transparent);
+}
+
+/* The weekly part under each card's today value, pushed to the bottom so
+   the weekly parts line up across the row. The divider is drawn inside it,
+   so there's always some space above it. */
+.os-week {
+  margin-top: auto;
+}
+
+.os-week::before {
+  content: '';
+  display: block;
+  margin: 0.6rem 0 0.65rem;
+  border-top: 1px solid var(--os-border);
+}
+
+.os-week-total {
+  font-size: 0.8rem;
+  color: var(--os-muted);
+}
+
+.os-week-total strong {
+  color: var(--os-text);
+  font-weight: 700;
+}
+
+/* Day by day: this week's bar in front of last week's dashed outline */
+.os-week-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  height: 40px;
+  margin-top: 0.6rem;
+}
+
+.os-week-day {
+  position: relative;
+}
+
+/* Baseline, so empty days still show */
+.os-week-day::after {
+  content: '';
+  position: absolute;
+  inset: auto 12% 0 12%;
+  height: 1px;
+  background: var(--os-border-strong);
+}
+
+.os-week-day.is-clickable {
+  cursor: pointer;
+}
+
+.os-week-ghost,
+.os-week-bar {
+  position: absolute;
+  bottom: 0;
+  border-radius: 3px 3px 1px 1px;
+}
+
+.os-week-ghost {
+  inset-inline: 12%;
+  border: 1px dashed color-mix(in srgb, var(--os-accent) 55%, transparent);
+  border-bottom: 0;
+}
+
+.os-week-bar {
+  inset-inline: 28%;
+  background: var(--os-accent);
+  transition: filter 0.15s;
+}
+
+.os-week-day.is-clickable:hover .os-week-bar {
+  filter: brightness(1.25);
+}
+
+.os-week-labels {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0.2rem 0 0.45rem;
+  font-size: 0.65rem;
+  text-align: center;
+  color: var(--os-faint);
+}
+
+.os-week-labels .is-today {
+  color: var(--os-text);
+  font-weight: 700;
+}
+
+/* The change moves under the value when the card is narrow */
+.os-week-compare {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--os-muted);
+}
+
+.os-week-compare strong {
+  color: var(--os-text);
+  font-weight: 600;
+}
+
+/* Up in the card's color, down in gray: more isn't better or worse */
+.os-trend {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--os-muted);
+  background: var(--os-inset);
+}
+
+.os-trend.is-up {
+  color: var(--os-accent);
+  background: color-mix(in srgb, var(--os-accent) 15%, transparent);
+}
+
 /* ===== Scene highlights ===== */
 .os-highlights {
   display: grid;

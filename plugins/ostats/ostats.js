@@ -46,7 +46,9 @@
   // keep them in page order; the number is stripped off here.
   async function getPluginSettings() {
     try {
-      const data = await callGQL({ query: 'query { configuration { plugins } }' })
+      const data = await callGQL({
+        query: 'query { configuration { plugins } }',
+      })
       const saved = data.configuration?.plugins?.ostats || {}
       const settings = {}
       Object.keys(saved).forEach((key) => {
@@ -62,11 +64,12 @@
   // ===== LAYOUT CHOICES =====
   // Toggles on the page itself (side by side, list expanded) are remembered
   // in this browser rather than saved as plugin settings.
-  function loadLayoutChoice(key) {
+  function loadLayoutChoice(key, fallback = false) {
     try {
-      return localStorage.getItem(key) === '1'
+      const saved = localStorage.getItem(key)
+      return saved === null ? fallback : saved === '1'
     } catch (e) {
-      return false
+      return fallback
     }
   }
 
@@ -358,7 +361,8 @@
 
   setInterval(saveWatchTime, SAVE_INTERVAL_MS)
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveWatchTime({ keepalive: true })
+    if (document.visibilityState === 'hidden')
+      saveWatchTime({ keepalive: true })
   })
   window.addEventListener('pagehide', () => saveWatchTime({ keepalive: true }))
 
@@ -369,7 +373,11 @@
   // button works the same on the image page, in the lightbox or anywhere
   // else. Each change is saved once Stash confirms it.
   const IMAGE_O_MUTATION = /\bimage(Increment|Decrement|Reset)O\b/
-  const IMAGE_O_ACTIONS = { Increment: 'add', Decrement: 'remove', Reset: 'reset' }
+  const IMAGE_O_ACTIONS = {
+    Increment: 'add',
+    Decrement: 'remove',
+    Reset: 'reset',
+  }
   const IMAGE_O_RETRY_MS = 5000
 
   // Changes are saved one at a time in click order, so a quick add then
@@ -390,7 +398,10 @@
         sendImageOs()
       },
       drop(reason) {
-        console.warn(`[OStats] Image ${imageId}: ${action} O not saved:`, reason)
+        console.warn(
+          `[OStats] Image ${imageId}: ${action} O not saved:`,
+          reason,
+        )
         const index = pendingImageOs.indexOf(change)
         if (index !== -1) pendingImageOs.splice(index, 1)
         sendImageOs()
@@ -406,7 +417,9 @@
         const { confirmed, ...change } = pendingImageOs[0]
         const count = await runPluginOperation({ mode: 'image_o', ...change })
         pendingImageOs.shift()
-        debugLog(`Image ${change.image_id}: ${change.action} O (${count} saved)`)
+        debugLog(
+          `Image ${change.image_id}: ${change.action} O (${count} saved)`,
+        )
       }
     } catch (err) {
       console.error('[OStats] Failed to save image O, retrying:', err)
@@ -482,7 +495,6 @@
     }
     return { watchTime: {}, imageOHistory: {} }
   }
-
 
   // ===== UI BUILDING BLOCKS =====
   // Styles live in ostats.css; elements only get classes here.
@@ -770,6 +782,41 @@
     })
   }
 
+  // average watch time per O today. Image O's have no watch time, so only
+  // scene O's count.
+  function createAvgMinPerOToday(row, watchTimeData, oHistoryCache) {
+    const today = getTodayDate()
+    const os = oHistoryCache.sceneDayTotals[today] || 0
+    const seconds = getWatchSeconds(watchTimeData[today])
+    createStatCard(row, {
+      icon: '⏱️',
+      value: os > 0 ? formatDuration(seconds / os) : '–',
+      label: 'Avg min/O Today',
+      accent: 'var(--os-pink)',
+    })
+  }
+
+  // Scenes watched this week: played this week (their latest play is) or
+  // with an O this week, counted once each
+  function countVideosThisWeek(scenes, oHistoryCache, daysSoFar) {
+    const monday = daysSoFar[0]
+    const sceneIds = new Set()
+    scenes.forEach((scene) => {
+      if (
+        scene.last_played_at &&
+        getLocalDateString(new Date(scene.last_played_at)) >= monday
+      ) {
+        sceneIds.add(scene.id)
+      }
+    })
+    daysSoFar.forEach((day) => {
+      ;(oHistoryCache.dayMap.get(day) || []).forEach((event) => {
+        sceneIds.add(event.scene.id)
+      })
+    })
+    return sceneIds.size
+  }
+
   // record session - day with longest watch time
   async function createWatchTimeToday(row, watchTimeData) {
     let maxDuration = 0
@@ -787,7 +834,7 @@
     const subEl = createStatCard(row, {
       icon: '⌛',
       value: formatDuration(maxDuration),
-      label: 'Most Time Spent in One Day',
+      label: 'Most Time Spent Watching in One Day',
       accent: 'var(--os-green)',
     })
     if (maxDay && maxDuration > 0) {
@@ -1260,7 +1307,10 @@
     scenes.forEach((scene) => {
       const time = oHistoryCache.lastO.get(scene.id)
       if (!time) return
-      if (foundTime === null || (pickNewest ? time > foundTime : time < foundTime)) {
+      if (
+        foundTime === null ||
+        (pickNewest ? time > foundTime : time < foundTime)
+      ) {
         found = scene
         foundTime = time
       }
@@ -1309,6 +1359,277 @@
       "Image with Most O's",
       'var(--os-orange)',
     )
+  }
+
+  // ===== THIS WEEK =====
+  // The weekly part of the Today & Weekly cards: this week from Monday up
+  // to today, next to the same days of last week and of a usual week, with
+  // the week day by day (this week's bars in front of last week's
+  // outlines). createWeekTrends works the weeks out once; addTo adds a
+  // stat's weekly part to the bottom of a card.
+  function createWeekTrends(oHistoryCache, watchTimeData) {
+    const watchTotals = {}
+    Object.keys(watchTimeData).forEach((day) => {
+      watchTotals[day] = getWatchSeconds(watchTimeData[day])
+    })
+    const oTotals = oHistoryCache.dayTotals
+    const sceneOTotals = oHistoryCache.sceneDayTotals
+    const sum = (totals, days) =>
+      days.reduce((total, day) => total + (totals[day] || 0), 0)
+
+    // Monday first; elapsed counts the days so far, today included
+    const now = new Date()
+    const elapsed = ((now.getDay() + 6) % 7) + 1
+    function weekOf(weeksBack) {
+      const days = []
+      for (let i = 0; i < 7; i++) {
+        days.push(
+          getLocalDateString(
+            new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate() - (elapsed - 1) - weeksBack * 7 + i,
+            ),
+          ),
+        )
+      }
+      return days
+    }
+    const thisWeek = weekOf(0)
+    const lastWeek = weekOf(1)
+    const soFar = (week) => week.slice(0, elapsed)
+
+    // A usual week: the same days of every earlier week since the stat's
+    // data starts. Only whole weeks count, so the week tracking began in
+    // doesn't pull the average down; nor do weeks before watch time was
+    // tracked, though O's often go back further.
+    const firstActive = (totals) =>
+      Object.keys(totals)
+        .filter((day) => totals[day] > 0)
+        .sort()[0]
+    function earlierSince(firstDay) {
+      const weekList = []
+      for (let back = 1; firstDay && weekOf(back)[0] >= firstDay; back++) {
+        weekList.push(soFar(weekOf(back)))
+      }
+      return { days: weekList.flat(), weeks: weekList.length, weekList }
+    }
+    const sinceO = earlierSince(firstActive(oTotals))
+    const sinceWatch = earlierSince(firstActive(watchTotals))
+
+    const weekdayName = (day) =>
+      parseLocalDate(day).toLocaleDateString('en-US', { weekday: 'short' })
+    const formatCount = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+
+    // Totals add up over the days; ratios (min/O) are worked out over all
+    // of them at once, so a usual week's is the ratio of the totals. Counts
+    // of different things (videos) are counted week by week, so one
+    // watched in two weeks counts in both.
+    const metrics = {
+      os: {
+        earlier: sinceO,
+        measure: (days) => sum(oTotals, days),
+        format: formatCount,
+        weekText: () => ' this week',
+      },
+      watch: {
+        earlier: sinceWatch,
+        measure: (days) => sum(watchTotals, days),
+        format: formatDuration,
+        weekText: () => ' this week',
+      },
+      oDays: {
+        earlier: sinceO,
+        measure: (days) => days.filter((day) => (oTotals[day] || 0) > 0).length,
+        format: formatCount,
+        weekText: (value) =>
+          ` day${value === 1 ? '' : 's'} with an O this week`,
+      },
+      // Image O's have no watch time, so only scene O's count
+      avgMinPerO: {
+        earlier: sinceWatch,
+        isRatio: true,
+        measure: (days) => {
+          const os = sum(sceneOTotals, days)
+          return os > 0 ? sum(watchTotals, days) / os : null
+        },
+        format: formatDuration,
+        weekText: () => ' this week',
+      },
+    }
+
+    // The weekly part of a card: a line on top, then (from addTo) the days
+    // and the comparisons
+    function startWeekPart(card, value, text) {
+      const part = createEl('div', 'os-week')
+      const total = createEl('div', 'os-week-total')
+      total.appendChild(createEl('strong', '', value))
+      total.append(text)
+      part.appendChild(total)
+      card.appendChild(part)
+      return part
+    }
+
+    function addTo(card, key) {
+      const metric = metrics[key]
+      const current = metric.measure(soFar(thisWeek))
+      const last = metric.measure(soFar(lastWeek))
+      const { days: earlierDays, weeks: earlierWeeks, weekList } =
+        metric.earlier
+      let usual = null
+      if (earlierWeeks > 0) {
+        if (metric.isRatio) {
+          usual = metric.measure(earlierDays)
+        } else if (metric.perWeek) {
+          usual =
+            weekList.reduce((total, days) => total + metric.measure(days), 0) /
+            earlierWeeks
+        } else {
+          usual = metric.measure(earlierDays) / earlierWeeks
+        }
+      }
+
+      const part = startWeekPart(
+        card,
+        current === null ? '–' : metric.format(current),
+        metric.weekText(current),
+      )
+
+      // Day by day: this week in front, last week's outline behind
+      const daily = (week) => week.map((day) => metric.measure([day]))
+      const thisDaily = daily(thisWeek)
+      const lastDaily = daily(lastWeek)
+      const maxValue = Math.max(
+        0,
+        ...thisDaily.slice(0, elapsed).filter((v) => v !== null),
+        ...lastDaily.filter((v) => v !== null),
+      )
+      const height = (value) =>
+        value && maxValue ? `max(3px, ${(value / maxValue) * 100}%)` : '0'
+      const strip = createEl('div', 'os-week-days')
+      const labels = createEl('div', 'os-week-labels')
+      thisWeek.forEach((day, i) => {
+        const isFuture = i >= elapsed
+        const col = createEl('div', 'os-week-day')
+        const ghost = createEl('div', 'os-week-ghost')
+        ghost.style.height = height(lastDaily[i])
+        col.appendChild(ghost)
+        if (!isFuture) {
+          const bar = createEl('div', 'os-week-bar')
+          bar.style.height = height(thisDaily[i])
+          col.appendChild(bar)
+          col.classList.add('is-clickable')
+          col.addEventListener('click', () => openDayInOnThisDay(day))
+        }
+        const show = (value) => (value === null ? 'none' : metric.format(value))
+        col.title =
+          `${weekdayName(day)} ${formatShortDate(day)}: ` +
+          `${isFuture ? 'still to come' : show(thisDaily[i])} · last week ${show(lastDaily[i])}`
+        strip.appendChild(col)
+        labels.appendChild(
+          createEl(
+            'span',
+            i === elapsed - 1 ? 'is-today' : '',
+            weekdayName(day).charAt(0),
+          ),
+        )
+      })
+      part.append(strip, labels)
+
+      // Comparison lines: the other week's value and the change from it
+      function addCompare(label, other, trend) {
+        const line = createEl('div', 'os-week-compare')
+        const text = createEl('span', '', `${label} `)
+        text.appendChild(
+          createEl('strong', '', other === null ? '–' : metric.format(other)),
+        )
+        line.appendChild(text)
+        if (trend) {
+          line.appendChild(
+            createEl('span', `os-trend ${trend.className}`, trend.text),
+          )
+        }
+        part.appendChild(line)
+      }
+      function trendFrom(other, asPercent) {
+        if (current === null || other === null) return null
+        const delta = current - other
+        if (asPercent) {
+          if (other === 0) {
+            return current > 0 ? { className: 'is-up', text: '▲' } : null
+          }
+          const percent = Math.round((delta / other) * 100)
+          if (Math.abs(percent) < 5) return { className: 'is-even', text: '≈' }
+          return percent > 0
+            ? { className: 'is-up', text: `▲ ${percent}%` }
+            : { className: 'is-down', text: `▼ ${-percent}%` }
+        }
+        if (delta === 0) return { className: 'is-even', text: '=' }
+        return delta > 0
+          ? { className: 'is-up', text: `▲ ${metric.format(delta)}` }
+          : { className: 'is-down', text: `▼ ${metric.format(-delta)}` }
+      }
+      addCompare('Last week', last, trendFrom(last, false))
+      if (earlierWeeks > 0) {
+        addCompare('Usual', usual, trendFrom(usual, true))
+      } else {
+        part.appendChild(
+          createEl('div', 'os-week-compare', 'No earlier weeks yet'),
+        )
+      }
+    }
+
+    // Which days are compared, said once (on the Weekly toggle) so the
+    // cards can stay short
+    const days =
+      elapsed === 1 ? 'Monday' : `Mon–${weekdayName(thisWeek[elapsed - 1])}`
+
+    // Videos watched: each scene played or with an O that day, counted
+    // once. Needs the scenes' play history, which loads after the page.
+    function addVideos(scenes) {
+      const videosByDay = new Map()
+      const addVideo = (day, sceneId) => {
+        if (!videosByDay.has(day)) videosByDay.set(day, new Set())
+        videosByDay.get(day).add(sceneId)
+      }
+      scenes.forEach((scene) => {
+        scene.play_history.forEach((timestamp) => {
+          const time = new Date(timestamp)
+          if (!isNaN(time.getTime())) {
+            addVideo(getLocalDateString(time), scene.id)
+          }
+        })
+      })
+      oHistoryCache.dayMap.forEach((events, day) => {
+        events.forEach((event) => addVideo(day, event.scene.id))
+      })
+      const counts = {}
+      videosByDay.forEach((ids, day) => {
+        counts[day] = ids.size
+      })
+      metrics.videos = {
+        earlier: earlierSince(firstActive(counts)),
+        perWeek: true,
+        measure: (days) => {
+          const ids = new Set()
+          days.forEach((day) => videosByDay.get(day)?.forEach((id) => ids.add(id)))
+          return ids.size
+        },
+        format: formatCount,
+        weekText: (value) => ` video${value === 1 ? '' : 's'} this week`,
+      }
+    }
+
+    return {
+      // Which days the weekly parts compare, for the toggle's tooltip
+      note: `${days}, compared with the same days of last week and of a usual week`,
+      // This week's days up to today
+      daysSoFar: soFar(thisWeek),
+      addTo,
+      // A weekly line alone, until a stat's day-by-day history is ready
+      addTotal: startWeekPart,
+      addVideos,
+    }
   }
 
   // ===== CALENDARS =====
@@ -1477,7 +1798,6 @@
       const grid = createEl('div', 'os-heatmap-grid')
       grid.style.setProperty('--os-weeks', weeks)
       scroller.appendChild(grid)
-
       ;['Mon', '', 'Wed', '', 'Fri', '', 'Sun'].forEach((label, i) => {
         const weekday = createEl('div', 'os-heatmap-weekday', label)
         weekday.style.gridRow = String(i + 2)
@@ -1548,7 +1868,9 @@
             const cell = createDayCell(day)
             // Monday first, like the strip; the 1st sits under its weekday
             if (i === 0) {
-              cell.style.gridColumnStart = String(((day.date.getDay() + 6) % 7) + 1)
+              cell.style.gridColumnStart = String(
+                ((day.date.getDay() + 6) % 7) + 1,
+              )
             }
             monthGrid.appendChild(cell)
           })
@@ -1614,7 +1936,10 @@
           plural(longest.days, 'day'),
           longest.days > 1
             ? longest.to === todayStr
-              ? [[' since ', longest.from], [' (still going)', null]]
+              ? [
+                  [' since ', longest.from],
+                  [' (still going)', null],
+                ]
               : [
                   [' between ', longest.from],
                   [' and ', longest.to],
@@ -1638,7 +1963,10 @@
                 [' between ', gap.from],
                 [' and ', gap.to],
               ]
-            : [[' since ', gap.from], [' (still going)', null]],
+            : [
+                [' since ', gap.from],
+                [' (still going)', null],
+              ],
         )
         fact.title = `All time, counted from your first logged ${gapNoun} on ${formatShortDate(firstActiveDay)}`
       }
@@ -2002,7 +2330,9 @@
 
       // The busiest bar (the first, if tied) keeps its number when the
       // month view is too narrow to show them all (see ostats.css)
-      const peak = data.find((item) => item.value > 0 && item.value === maxValue)
+      const peak = data.find(
+        (item) => item.value > 0 && item.value === maxValue,
+      )
 
       data.forEach((item) => {
         const col = createEl('div', 'os-chart-col')
@@ -2478,7 +2808,9 @@
       const videoListContainer = createEl('div')
       contentContainer.appendChild(videoListContainer)
 
-      const uniqueScenes = new Set(daySceneEvents.map((event) => event.scene.id))
+      const uniqueScenes = new Set(
+        daySceneEvents.map((event) => event.scene.id),
+      )
       const viewedItems = [
         ...daySceneEvents,
         ...dayImageOs.map(({ image, time }) => ({ image, time, hasO: true })),
@@ -2522,7 +2854,10 @@
       } else {
         viewedItems.forEach(({ scene, image, time, hasO }) => {
           const item = highlightOf({ scene, image })
-          const videoItem = createEl('div', hasO ? 'os-video has-o' : 'os-video')
+          const videoItem = createEl(
+            'div',
+            hasO ? 'os-video has-o' : 'os-video',
+          )
           videoItem.addEventListener('click', () => {
             window.open(item.href, '_blank', 'noopener,noreferrer')
           })
@@ -2672,24 +3007,57 @@
 
     // Individual stats, skipped when their own setting is on. The whole-row
     // setting overrides these, so a hidden row never shows any of its stats.
+    // Each Today card with its weekly part (unless Hide This Week is on)
+    const week = settings.hideThisWeek
+      ? null
+      : createWeekTrends(oHistoryCache, watchTimeData)
+    // Set when the Videos Watched card is shown with its week
+    let fillVideosWeek = null
     const todayStats = settings.hideTopStats
       ? []
       : [
           [
             settings.hideTopStatsOsToday,
             (row) => createOrgasmsToday(row, scenes, oHistoryCache),
+            (card) => week.addTo(card, 'os'),
           ],
           [
             settings.hideTopStatsStreak,
             (row) => createOrgasmStreak(row, scenes, oHistoryCache),
+            (card) => week.addTo(card, 'oDays'),
           ],
           [
             settings.hideTodayWatchTime,
             (row) => createWatchTimeTodayStat(row, watchTimeData),
+            (card) => week.addTo(card, 'watch'),
           ],
           [
             settings.hideTodayVideosWatched,
             (row) => createVideosWatchedToday(row, scenes, oHistoryCache),
+            (card) => {
+              // This week's count now; the days and comparisons once play
+              // history has loaded (fillVideosWeek, below)
+              const count = countVideosThisWeek(
+                scenes,
+                oHistoryCache,
+                week.daysSoFar,
+              )
+              const countOnly = week.addTotal(
+                card,
+                String(count),
+                ` video${count === 1 ? '' : 's'} this week`,
+              )
+              fillVideosWeek = () => {
+                week.addVideos(scenes)
+                countOnly.remove()
+                week.addTo(card, 'videos')
+              }
+            },
+          ],
+          [
+            settings.hideTodayAvgMinPerO,
+            (row) => createAvgMinPerOToday(row, watchTimeData, oHistoryCache),
+            (card) => week.addTo(card, 'avgMinPerO'),
           ],
         ].filter(([hidden]) => !hidden)
 
@@ -2707,7 +3075,12 @@
           [
             settings.hideTopStatsAverageMinPerO,
             (row) =>
-              createAverageOPerMinute(row, scenes, watchTimeData, oHistoryCache),
+              createAverageOPerMinute(
+                row,
+                scenes,
+                watchTimeData,
+                oHistoryCache,
+              ),
           ],
         ].filter(([hidden]) => !hidden)
 
@@ -2738,11 +3111,35 @@
 
     // Sections are added in page order. A hidden section is never created,
     // so the spacing between the ones that are left stays even.
+    // Today's cards, one row, each with this week under today
     if (todayStats.length > 0) {
-      const section = createSection(root, 'Today')
-      const grid = createEl('div', 'os-grid')
+      const section = createSection(root, week ? 'Today & Weekly' : 'Today')
+      const grid = createEl('div', 'os-grid os-today-grid')
+      grid.style.setProperty('--os-cols', todayStats.length)
       section.appendChild(grid)
-      for (const [, create] of todayStats) await create(grid)
+      for (const [, create, addWeek] of todayStats) {
+        await create(grid)
+        if (week) addWeek(grid.lastElementChild)
+      }
+
+      // Weekly toggle: shows or hides the weekly part of every card,
+      // remembered in this browser (shown at first)
+      if (week) {
+        const toggle = createEl('button', 'os-btn os-weekly-toggle', 'Weekly')
+        toggle.type = 'button'
+        toggle.title = `Show this week in each card: ${week.note}`
+        const setWeekly = (on) => {
+          grid.classList.toggle('is-weekly-hidden', !on)
+          toggle.setAttribute('aria-pressed', String(on))
+        }
+        toggle.addEventListener('click', () => {
+          const on = grid.classList.contains('is-weekly-hidden')
+          setWeekly(on)
+          saveLayoutChoice('ostats_show_weekly', on)
+        })
+        setWeekly(loadLayoutChoice('ostats_show_weekly', true))
+        section.querySelector('.os-section-head').appendChild(toggle)
+      }
     }
 
     // Stash's totals, then the records
@@ -2785,7 +3182,8 @@
       await createChartPair(section, {
         storageKey: 'ostats_calendars_side_by_side',
         createO:
-          !settings.hideOCalendar && ((row) => createOHeatmap(row, oHistoryCache)),
+          !settings.hideOCalendar &&
+          ((row) => createOHeatmap(row, oHistoryCache)),
         createWatch:
           !settings.hideWatchCalendar &&
           ((row) => createWatchHeatmap(row, watchTimeData)),
@@ -2814,11 +3212,21 @@
       createWatchTimeExportButton(root, oHistoryCache)
     }
 
+    // Play history is loaded after everything else, for On This Day and the
+    // Videos Watched card's week
+    if (!onThisDaySection && !fillVideosWeek) return
+    const playHistoryLoaded = addPlayHistory(scenes)
+    if (fillVideosWeek) {
+      playHistoryLoaded
+        .then(fillVideosWeek)
+        .catch((err) =>
+          console.error("[OStats] Failed loading this week's videos:", err),
+        )
+    }
     if (!onThisDaySection) return
 
-    // On This Day also needs play history, loaded after everything else
     const onThisDayBody = createEl('div')
-    addPlayHistory(scenes)
+    playHistoryLoaded
       .then(async () => {
         onThisDaySection.querySelector('.os-otd-loading')?.remove()
         onThisDaySection.appendChild(onThisDayBody)
