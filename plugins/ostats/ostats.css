@@ -810,21 +810,21 @@ a.os-stat:hover {
   min-width: 3.5rem;
 }
 
-/* ===== What Works for You ===== */
+/* ===== Top Performing ===== */
 /* Three columns, so the top 9 fill three full rows; one on narrow screens */
-.os-works-list {
+.os-top-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.3rem 1.5rem;
 }
 
 @media (max-width: 860px) {
-  .os-works-list {
+  .os-top-list {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-.os-works-row {
+.os-top-row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -836,13 +836,13 @@ a.os-stat:hover {
   transition: background-color 0.15s;
 }
 
-.os-works-row:hover {
+.os-top-row:hover {
   background: var(--os-card-hover);
   color: inherit;
   text-decoration: none;
 }
 
-.os-works-avatar {
+.os-top-avatar {
   width: 38px;
   height: 38px;
   flex-shrink: 0;
@@ -853,7 +853,7 @@ a.os-stat:hover {
 }
 
 /* Tags and studios: their first letter */
-.os-works-avatar.is-initial {
+.os-top-avatar.is-initial {
   display: grid;
   place-items: center;
   font-size: 0.9rem;
@@ -863,19 +863,19 @@ a.os-stat:hover {
   border: 1px solid color-mix(in srgb, var(--os-accent) 30%, transparent);
 }
 
-.os-works-info {
+.os-top-info {
   flex: 1;
   min-width: 0;
 }
 
-.os-works-top {
+.os-top-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
 }
 
-.os-works-name {
+.os-top-name {
   font-size: 0.9rem;
   font-weight: 600;
   white-space: nowrap;
@@ -884,7 +884,7 @@ a.os-stat:hover {
 }
 
 /* #1, #2 …: the top three in the section's colour */
-.os-works-rank {
+.os-top-rank {
   flex-shrink: 0;
   font-size: 0.75rem;
   font-weight: 700;
@@ -892,11 +892,11 @@ a.os-stat:hover {
   color: var(--os-faint);
 }
 
-.os-works-row:nth-child(-n + 3) .os-works-rank {
+.os-top-row:nth-child(-n + 3) .os-top-rank {
   color: var(--os-accent);
 }
 
-.os-works-meta {
+.os-top-meta {
   margin-top: 0.1rem;
   font-size: 0.75rem;
   color: var(--os-muted);
@@ -1205,7 +1205,7 @@ a.os-stat:hover {
 }
 
 /* A whole row, in place of the list rows */
-.os-works-list > .os-empty {
+.os-top-list > .os-empty {
   grid-column: 1 / -1;
 }
 

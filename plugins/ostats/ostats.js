@@ -1651,18 +1651,18 @@
     }
   }
 
-  // ===== WHAT WORKS FOR YOU =====
+  // ===== TOP PERFORMING =====
   // Your top performers, tags and studios, by O's or by views. A scene's
   // O's and views count for each performer and tag in it, and its studio.
-  // Three rows of three (see .os-works-list)
-  const WHAT_WORKS_ROWS = 9
+  // Three rows of three (see .os-top-list)
+  const TOP_PERFORMING_ROWS = 9
 
   // A play, or an O on a scene with no play logged
   function getViews(scene) {
     return Math.max(scene.play_count, scene.o_counter > 0 ? 1 : 0)
   }
 
-  function createWhatWorks(parent, scenes) {
+  function createTopPerforming(parent, scenes) {
     let totalOs = 0
     let totalViews = 0
     const groups = {
@@ -1692,17 +1692,19 @@
     const plural = (n, word) =>
       `${n} ${word}${n === 1 ? '' : word === 'O' ? "'s" : 's'}`
 
-    const card = createEl('div', 'os-card os-chart os-works')
+    const card = createEl('div', 'os-card os-chart os-top')
     card.style.setProperty('--os-accent', 'var(--os-blue)')
     parent.appendChild(card)
 
     const head = createEl('div', 'os-chart-head')
-    head.appendChild(createEl('h4', 'os-chart-title', 'What Works for You'))
+    // Named after what's shown: Top Performers, Top Tags or Top Studios
+    const title = createEl('h4', 'os-chart-title')
+    head.appendChild(title)
     const actions = createEl('div', 'os-chart-actions')
     head.appendChild(actions)
     card.appendChild(head)
 
-    const list = createEl('div', 'os-works-list')
+    const list = createEl('div', 'os-top-list')
     card.appendChild(list)
 
     let kind = 'performers'
@@ -1740,6 +1742,7 @@
     )
 
     function render() {
+      title.innerText = `Top ${kind.charAt(0).toUpperCase()}${kind.slice(1)}`
       kindButtons.forEach((b) =>
         b.classList.toggle('is-active', b.dataset.value === kind),
       )
@@ -1755,7 +1758,7 @@
             ? b.os - a.os || a.views - b.views
             : b.views - a.views || b.os - a.os,
         )
-        .slice(0, WHAT_WORKS_ROWS)
+        .slice(0, TOP_PERFORMING_ROWS)
 
       list.innerHTML = ''
       if (entries.length === 0) {
@@ -1770,7 +1773,7 @@
       }
 
       entries.forEach((entry, index) => {
-        const row = createEl('a', 'os-works-row')
+        const row = createEl('a', 'os-top-row')
         openInNewTab(row, `/${kind}/${entry.id}`)
         row.title =
           sort === 'os'
@@ -1778,7 +1781,7 @@
             : `${Math.round((entry.views / totalViews) * 100)}% of all your views`
 
         if (kind === 'performers' && entry.image_path) {
-          const avatar = createEl('img', 'os-works-avatar')
+          const avatar = createEl('img', 'os-top-avatar')
           avatar.src = entry.image_path
           avatar.loading = 'lazy'
           avatar.alt = ''
@@ -1787,23 +1790,23 @@
           row.appendChild(
             createEl(
               'span',
-              'os-works-avatar is-initial',
+              'os-top-avatar is-initial',
               (entry.name || '?').charAt(0).toUpperCase(),
             ),
           )
         }
 
-        const info = createEl('div', 'os-works-info')
-        const top = createEl('div', 'os-works-top')
+        const info = createEl('div', 'os-top-info')
+        const top = createEl('div', 'os-top-top')
         top.appendChild(
-          createEl('span', 'os-works-name', entry.name || 'Unnamed'),
+          createEl('span', 'os-top-name', entry.name || 'Unnamed'),
         )
-        top.appendChild(createEl('span', 'os-works-rank', `#${index + 1}`))
+        top.appendChild(createEl('span', 'os-top-rank', `#${index + 1}`))
         info.appendChild(top)
         info.appendChild(
           createEl(
             'div',
-            'os-works-meta',
+            'os-top-meta',
             `${plural(entry.os, 'O')} · ${plural(entry.views, 'view')}`,
           ),
         )
@@ -3372,9 +3375,9 @@
       })
     }
 
-    if (!settings.hideWhatWorks) {
-      const section = createSection(root, 'What Works for You')
-      createWhatWorks(section, scenes)
+    if (!settings.hideTopPerforming) {
+      const section = createSection(root, 'Top Performing')
+      createTopPerforming(section, scenes)
       if (section.children.length === 1) section.remove()
     }
 

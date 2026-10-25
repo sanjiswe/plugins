@@ -98,10 +98,10 @@ settings:
     displayName: Hide Watch Calendar
     type: BOOLEAN
     description: Hides the Watch Calendar heatmap under the O Calendar. Default false.
-  14_hideWhatWorks:
-    displayName: Hide What Works for You
+  14_hideTopPerforming:
+    displayName: Hide Top Performing
     type: BOOLEAN
-    description: Hides the What Works for You section, which ranks your top performers, tags and studios by O's or by views. Default false.
+    description: Hides the Top Performing section, which ranks your top performers, tags and studios by O's or by views. Default false.
   15_hideOnThisDay:
     displayName: Hide On This Day
     type: BOOLEAN
