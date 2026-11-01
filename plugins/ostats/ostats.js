@@ -1817,6 +1817,280 @@
     render()
   }
 
+  // ===== LIBRARY GROWTH =====
+  // How the library has grown: the total at the end of each month (or
+  // year), as bars like the O and watch time graphs. Videos and storage
+  // come from when each scene was added to Stash, so scenes since deleted
+  // aren't counted; O's come from the O history, and watch time from what
+  // O Stats has tracked.
+
+  // Every scene in the library, just when it was added and its files' size
+  async function getLibraryGrowthScenes() {
+    const data = await callGQL({
+      query: `query {
+        findScenes(filter: { per_page: -1 }) {
+          scenes { created_at files { size } }
+        }
+      }`,
+    })
+    return data.findScenes?.scenes || []
+  }
+
+  function createLibraryGrowth(
+    parent,
+    libraryScenes,
+    oHistoryCache,
+    watchTimeData,
+  ) {
+    // Added per month: 'YYYY-MM' -> amount
+    const addedByMonth = { videos: {}, storage: {}, os: {}, watch: {} }
+    const addTo = (totals, month, amount) => {
+      totals[month] = (totals[month] || 0) + amount
+    }
+    libraryScenes.forEach((scene) => {
+      const added = new Date(scene.created_at)
+      if (isNaN(added.getTime())) return
+      const month = getLocalDateString(added).slice(0, 7)
+      addTo(addedByMonth.videos, month, 1)
+      addTo(
+        addedByMonth.storage,
+        month,
+        (scene.files || []).reduce((sum, file) => sum + (Number(file.size) || 0), 0),
+      )
+    })
+    Object.keys(oHistoryCache.dayTotals).forEach((day) => {
+      addTo(addedByMonth.os, day.slice(0, 7), oHistoryCache.dayTotals[day])
+    })
+    Object.keys(watchTimeData).forEach((day) => {
+      const seconds = getWatchSeconds(watchTimeData[day])
+      if (seconds > 0) addTo(addedByMonth.watch, day.slice(0, 7), seconds)
+    })
+
+    const metrics = {
+      videos: {
+        label: 'Videos',
+        accent: 'var(--os-amber)',
+        format: formatNumber,
+        total: (n) => `${formatNumber(n)} video${n === 1 ? '' : 's'}`,
+      },
+      storage: {
+        label: 'Storage',
+        accent: 'var(--os-gray)',
+        format: formatBytes,
+        total: formatBytes,
+      },
+      os: {
+        label: "O's",
+        accent: 'var(--os-blue)',
+        format: formatNumber,
+        total: (n) => `${formatNumber(n)} O${n === 1 ? '' : "'s"}`,
+      },
+      watch: {
+        label: 'Watch Time',
+        accent: 'var(--os-green)',
+        format: formatDuration,
+        total: (n) => `${formatLongDuration(n)} watched`,
+      },
+    }
+    const firstMonth = Object.keys(addedByMonth.videos)
+      .concat(Object.keys(addedByMonth.os))
+      .sort()[0]
+    if (!firstMonth) return
+
+    const card = createEl('div', 'os-card os-chart os-growth')
+    parent.appendChild(card)
+
+    // Header: the metric and its total on the left, switchers on the right
+    const head = createEl('div', 'os-chart-head')
+    card.appendChild(head)
+    const titleWrap = createEl('div')
+    const title = createEl('h4', 'os-chart-title')
+    titleWrap.appendChild(title)
+    const totalEl = createEl('div', 'os-chart-total')
+    titleWrap.appendChild(totalEl)
+    head.appendChild(titleWrap)
+    const actions = createEl('div', 'os-chart-actions')
+    head.appendChild(actions)
+
+    let metric = 'videos'
+    let view = 'month'
+    // The year shown in the month view
+    const thisYear = new Date().getFullYear()
+    let year = thisYear
+    // Each metric starts at its own first year (O's often start later)
+    const firstYearOf = () => {
+      const first = Object.keys(addedByMonth[metric]).sort()[0]
+      return first ? Number(first.slice(0, 4)) : thisYear
+    }
+
+    function addSwitcher(options, isActive, onPick) {
+      const switcher = createEl('div', 'os-segmented')
+      const buttons = options.map(([value, label]) => {
+        const button = createEl('button', '', label)
+        button.type = 'button'
+        button.addEventListener('click', () => {
+          onPick(value)
+          render()
+        })
+        switcher.appendChild(button)
+        return [value, button]
+      })
+      actions.appendChild(switcher)
+      return () =>
+        buttons.forEach(([value, button]) =>
+          button.classList.toggle('is-active', isActive(value)),
+        )
+    }
+    const showMetric = addSwitcher(
+      Object.keys(metrics).map((key) => [key, metrics[key].label]),
+      (value) => value === metric,
+      (value) => (metric = value),
+    )
+    const showView = addSwitcher(
+      [
+        ['month', 'Months'],
+        ['year', 'Years'],
+      ],
+      (value) => value === view,
+      (value) => {
+        view = value
+        year = thisYear
+      },
+    )
+
+    const plot = createEl('div', 'os-chart-plot')
+    card.appendChild(plot)
+
+    // Footer: previous / year / next, for the month view
+    const foot = createEl('div', 'os-chart-foot')
+    const pager = createEl('div', 'os-pager')
+    const prevBtn = createEl('button', 'os-btn os-btn-icon', '‹')
+    prevBtn.title = 'Previous year'
+    const periodLabel = createEl('span', 'os-pager-label')
+    const nextBtn = createEl('button', 'os-btn os-btn-icon', '›')
+    nextBtn.title = 'Next year'
+    pager.append(prevBtn, periodLabel, nextBtn)
+    foot.appendChild(pager)
+    card.appendChild(foot)
+    prevBtn.addEventListener('click', () => {
+      if (year > firstYearOf()) {
+        year--
+        render()
+      }
+    })
+    nextBtn.addEventListener('click', () => {
+      if (year < thisYear) {
+        year++
+        render()
+      }
+    })
+
+    // The total at the end of a month, and what was added in it
+    const monthKey = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`
+    function totalThrough(key) {
+      const totals = addedByMonth[metric]
+      return Object.keys(totals).reduce(
+        (sum, month) => sum + (month <= key ? totals[month] : 0),
+        0,
+      )
+    }
+
+    function render() {
+      const { label, accent, format, total } = metrics[metric]
+      card.style.setProperty('--os-accent', accent)
+      title.innerText = `${label} Over Time`
+      showMetric()
+      year = Math.max(year, firstYearOf())
+      showView()
+
+      const now = new Date()
+      const currentKey = monthKey(now.getFullYear(), now.getMonth())
+      const grandTotal = totalThrough(currentKey)
+      const addedThisYear = grandTotal - totalThrough(`${thisYear - 1}-12`)
+      totalEl.innerHTML = ''
+      totalEl.append(
+        createEl('strong', '', total(grandTotal)),
+        ` · ${addedThisYear > 0 ? '+' : ''}${format(addedThisYear)} this year`,
+      )
+
+      // Bars: the total at the end of each month of the year, or of each
+      // year; months still to come stay empty
+      const bars = []
+      if (view === 'month') {
+        for (let m = 0; m < 12; m++) {
+          const key = monthKey(year, m)
+          const isFuture = key > currentKey
+          bars.push({
+            label: new Date(year, m, 1).toLocaleDateString('en-US', {
+              month: 'short',
+            }),
+            long: new Date(year, m, 1).toLocaleDateString('en-US', {
+              month: 'long',
+              year: 'numeric',
+            }),
+            value: isFuture ? null : totalThrough(key),
+            added: isFuture ? null : addedByMonth[metric][key] || 0,
+            isCurrent: key === currentKey,
+          })
+        }
+        periodLabel.innerText = String(year)
+        prevBtn.disabled = year <= firstYearOf()
+        nextBtn.disabled = year >= thisYear
+        foot.style.display = ''
+      } else {
+        for (let y = firstYearOf(); y <= thisYear; y++) {
+          const end = y === thisYear ? currentKey : `${y}-12`
+          bars.push({
+            label: String(y),
+            long: String(y),
+            year: y,
+            value: totalThrough(end),
+            added: totalThrough(end) - totalThrough(`${y - 1}-12`),
+            isCurrent: y === thisYear,
+          })
+        }
+        foot.style.display = 'none'
+      }
+
+      const maxValue = Math.max(1, ...bars.map((bar) => bar.value || 0))
+      plot.innerHTML = ''
+      plot.classList.toggle('is-dense', bars.length > 12)
+      const grid = createEl('div', 'os-chart-grid')
+      for (let i = 0; i < 4; i++) grid.appendChild(createEl('span'))
+      plot.appendChild(grid)
+
+      bars.forEach((bar) => {
+        const col = createEl('div', 'os-chart-col')
+        if (bar.isCurrent) col.classList.add('is-current')
+        plot.appendChild(col)
+        const barArea = createEl('div', 'os-chart-bar-area')
+        col.appendChild(barArea)
+        if (bar.value) {
+          barArea.appendChild(createEl('div', 'os-chart-value', format(bar.value)))
+        }
+        const barEl = createEl('div', 'os-chart-bar')
+        barEl.style.height = `${((bar.value || 0) / maxValue) * 100}%`
+        barEl.style.minHeight = bar.value ? '4px' : '0'
+        barArea.appendChild(barEl)
+        col.appendChild(createEl('div', 'os-chart-label', bar.label))
+        if (bar.value !== null) {
+          barEl.title = `${bar.long}: ${total(bar.value)} (+${format(bar.added)})`
+        }
+        // A year's bar opens its months
+        if (view === 'year' && bar.value) {
+          col.classList.add('is-clickable')
+          barEl.title += ' · Show months'
+          barEl.addEventListener('click', () => {
+            view = 'month'
+            year = bar.year
+            render()
+          })
+        }
+      })
+    }
+    render()
+  }
+
   // ===== CALENDARS =====
   // A calendar year as a grid: one column per week (Monday first), one
   // square per day, darker for more. Used for O's and for watch time.
@@ -3397,6 +3671,34 @@
       const grid = createEl('div', 'os-grid os-grid-compact')
       section.appendChild(grid)
       createLibraryStats(grid, libraryStats)
+    }
+
+    // Library Growth needs every scene in the library, not just the ones
+    // watched, so it loads last and fills in when ready
+    if (!settings.hideLibraryGrowth) {
+      const section = createSection(root, 'Library Growth')
+      const loading = createEl(
+        'div',
+        'os-card os-otd-loading',
+        'Loading library growth…',
+      )
+      section.appendChild(loading)
+      getLibraryGrowthScenes()
+        .then((libraryScenes) => {
+          loading.remove()
+          createLibraryGrowth(
+            section,
+            libraryScenes,
+            oHistoryCache,
+            watchTimeData,
+          )
+          // An empty library has nothing to show
+          if (section.children.length === 1) section.remove()
+        })
+        .catch((err) => {
+          console.error('[OStats] Failed loading library growth:', err)
+          loading.innerText = 'Failed to load library growth.'
+        })
     }
 
     if (!settings.hideExportImportButtons) {

@@ -122,6 +122,10 @@ settings:
     displayName: Show Library Stats
     type: BOOLEAN
     description: Shows the Library section at the bottom of the page (scenes, images, galleries, performers, studios, groups and tags). Default false.
+  21a_hideLibraryGrowth:
+    displayName: Hide Library Growth
+    type: BOOLEAN
+    description: Hides the Library Growth chart at the bottom of the page, which shows how your library has grown over time in videos, storage or O's, by month or by year. It loads last, since it needs every scene in your library. Default false.
   22_hideExportImportButtons:
     displayName: Hide Export/Import Buttons
     type: BOOLEAN
