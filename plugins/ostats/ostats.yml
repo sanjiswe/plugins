@@ -1,6 +1,6 @@
 name: O Stats
 description: Adds O stats to the stats page
-version: 2.2
+version: 2.3
 url: https://discourse.stashapp.cc/t/o-stats/4766/7
 ui:
   css:
@@ -118,6 +118,14 @@ settings:
     displayName: '[On This Day] Hide Stats'
     type: BOOLEAN
     description: Hides the stats at the bottom of the On This Day section (O's, watch time, videos watched and average min/O). Default false.
+  20a_hideSessions:
+    displayName: Hide Sessions
+    type: BOOLEAN
+    description: Hides the Recent Sessions section, and in On This Day the session bars on the timeline, the day's Sessions list and the Sessions stat. Sessions are recorded automatically from what plays in Stash's scene player, and are still saved while this is on. Default false.
+  20b_sessionBreakMinutes:
+    displayName: '[Sessions] Break Between Sessions (minutes)'
+    type: NUMBER
+    description: How long nothing has to play before the next video starts a new session. It's the time between watching, not how long a video is, so a long video or a short pause stays one session. Default 30.
   21_showLibraryStats:
     displayName: Show Library Stats
     type: BOOLEAN

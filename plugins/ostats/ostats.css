@@ -902,6 +902,197 @@ a.os-stat:hover {
   color: var(--os-muted);
 }
 
+/* ===== Sessions ===== */
+/* On the On This Day timeline: one bar per session along the center line */
+.os-session-bar {
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  min-height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--os-green) 50%, transparent);
+  z-index: 3;
+  transition: background-color 0.15s;
+}
+
+/* Comes just before its bar; above the hour labels, below the markers */
+.os-session-hit {
+  position: absolute;
+  left: 50%;
+  width: 40px;
+  min-height: 12px;
+  transform: translate(-50%, -50%);
+  z-index: 7;
+}
+
+.os-session-hit.is-clickable {
+  cursor: pointer;
+}
+
+.os-session-hit.is-clickable:hover + .os-session-bar,
+.os-session-bar.is-hover {
+  background: var(--os-green);
+}
+
+/* A session's preview on the On This Day timeline: two side by side,
+   three with the first on the left, four in a 2x2 grid */
+.os-thumb-grid {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+}
+
+.os-thumb-grid[data-count='2'] {
+  grid-template-rows: 1fr;
+}
+
+.os-thumb-grid[data-count='3'] img:first-child {
+  grid-row: span 2;
+}
+
+.os-session-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.os-session-wrap {
+  border: 1px solid var(--os-border);
+  border-radius: var(--os-radius-sm);
+  background: var(--os-inset);
+  overflow: hidden;
+}
+
+.os-session-wrap.is-open {
+  border-color: var(--os-border-strong);
+}
+
+/* A session with an O: blue, like an O in Content Viewed */
+.os-session-wrap.has-o {
+  background: rgba(76, 141, 255, 0.08);
+  border-color: rgba(76, 141, 255, 0.35);
+}
+
+.os-session-wrap.has-o .os-session:hover {
+  background: rgba(76, 141, 255, 0.06);
+}
+
+.os-session-o {
+  font-size: 1.2rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.os-session-o:empty {
+  display: none;
+}
+
+/* A session's summary row: when, how much, a few thumbnails */
+.os-session {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.os-session:hover {
+  background: var(--os-card-hover);
+}
+
+.os-session:focus-visible {
+  outline: 2px solid var(--os-accent);
+  outline-offset: -2px;
+}
+
+.os-session-day {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.os-session-time {
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+  color: var(--os-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.os-session-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+  font-size: 0.82rem;
+  color: var(--os-muted);
+}
+
+.os-session-stats strong {
+  color: var(--os-text);
+}
+
+.os-session-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.os-session-thumbs img {
+  width: 56px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #000;
+}
+
+.os-session-extra {
+  padding: 0 0.2rem;
+  font-size: 0.75rem;
+  color: var(--os-muted);
+}
+
+.os-session-chevron {
+  color: var(--os-faint);
+  transition: transform 0.15s;
+}
+
+.os-session-wrap.is-open .os-session-chevron {
+  transform: rotate(180deg);
+}
+
+/* The videos in a session, like the Content Viewed list */
+.os-session-detail {
+  margin: 0 0.6rem 0.6rem;
+}
+
+.os-session-more {
+  display: flex;
+  margin: 0.8rem auto 0;
+}
+
+@media (max-width: 600px) {
+  /* When, 💦 and the arrow on top; what was watched underneath */
+  .os-session {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.4rem 0.75rem;
+  }
+
+  .os-session-stats {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .os-session-thumbs {
+    display: none;
+  }
+}
+
 /* ===== O Calendar ===== */
 .os-heatmap-scroll {
   overflow-x: auto;
@@ -1086,6 +1277,11 @@ a.os-stat:hover {
   grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
   gap: 1.25rem;
   align-items: start;
+}
+
+/* The day's sessions, under the timeline and Content Viewed */
+.os-otd-sessions {
+  margin-top: 1.25rem;
 }
 
 .os-panel-head {
