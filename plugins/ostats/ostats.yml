@@ -126,6 +126,10 @@ settings:
     displayName: '[Sessions] Break Between Sessions (minutes)'
     type: NUMBER
     description: How long nothing has to play before the next video starts a new session. It's the time between watching, not how long a video is, so a long video or a short pause stays one session. Default 30.
+  20c_sessionMinVideos:
+    displayName: '[Sessions] Videos Needed for a Session'
+    type: NUMBER
+    description: How many videos a session needs before it shows up in Sessions and On This Day. Sessions with fewer still count toward your watch time. Default 2.
   21_showLibraryStats:
     displayName: Show Library Stats
     type: BOOLEAN

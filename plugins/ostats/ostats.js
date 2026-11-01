@@ -2316,10 +2316,11 @@
   const SESSION_PLAY_GRACE_MS = 5 * 60 * 1000
   const SESSIONS_PER_PAGE = 5
   const SESSION_MIN_STRETCH_SECONDS = 5
-  // Only sessions with at least this many videos are shown. The others
-  // still count toward watch time and Content Viewed.
-  const SESSION_MIN_VIDEOS = 2
-  const isShownSession = (session) => session.videos.size >= SESSION_MIN_VIDEOS
+  // Only sessions with at least this many videos are shown (a setting).
+  // The others still count toward watch time and Content Viewed.
+  const DEFAULT_SESSION_MIN_VIDEOS = 2
+  let sessionMinVideos = DEFAULT_SESSION_MIN_VIDEOS
+  const isShownSession = (session) => session.videos.size >= sessionMinVideos
 
   // scenes need their play history (addPlayHistory), to tell which videos
   // Stash counted as watched
@@ -4547,19 +4548,21 @@
 
     // Sessions, from the playback stretches. The break that ends one is a
     // setting (minutes); anything that isn't a positive number uses 30.
-    // They need play history (to list only the videos Stash counted as
-    // watched), so they're worked out once it has loaded, below.
+    // So is how many videos one needs to be shown; anything that isn't a
+    // positive number uses 2. They need play history (to list only the
+    // videos Stash counted as watched), so they're worked out once it has
+    // loaded, below.
     const sessionBreak =
       Number(settings.sessionBreakMinutes) > 0
         ? Number(settings.sessionBreakMinutes)
         : DEFAULT_SESSION_BREAK_MINUTES
+    sessionMinVideos =
+      Number(settings.sessionMinVideos) > 0
+        ? Number(settings.sessionMinVideos)
+        : DEFAULT_SESSION_MIN_VIDEOS
     let sessionsSection = null
     if (!settings.hideSessions) {
-      sessionsSection = createSection(
-        root,
-        'Sessions',
-        `A break of ${sessionBreak}+ minutes starts a new one`,
-      )
+      sessionsSection = createSection(root, 'Sessions')
       sessionsSection.appendChild(
         createEl('div', 'os-card os-otd-loading', 'Loading sessions…'),
       )
