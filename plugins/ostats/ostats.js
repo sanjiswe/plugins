@@ -2524,11 +2524,10 @@
       session.viewings = session.viewings.filter(isCounted)
       session.seconds = session.viewings.reduce((sum, v) => sum + v.seconds, 0)
       // Each video once, in the order first watched, with all its viewings
-      // added up; the ones after its first are marked as watched again
+      // added up
       session.videos = new Map()
       session.viewings.forEach((viewing) => {
         const video = session.videos.get(viewing.sceneId)
-        viewing.again = !!video
         if (video) {
           video.seconds += viewing.seconds
           video.os += viewing.os
@@ -2643,7 +2642,7 @@
     const rows = new Map()
     let shown = 0
 
-    function videoItem({ scene, image, sceneId, seconds, os, time, again }) {
+    function videoItem({ scene, image, sceneId, seconds, os, time }) {
       const item = scene || image ? highlightOf({ scene, image }) : null
       const row = createEl('div', os > 0 ? 'os-video has-o' : 'os-video')
       if (item) {
@@ -2666,7 +2665,7 @@
           'os-video-meta',
           image
             ? `${formatClock(time)} · Image`
-            : `${formatClock(time)} · ${seconds > 0 ? `${formatDuration(seconds)} watched` : 'O only'}${again ? ' · again' : ''}`,
+            : `${formatClock(time)} · ${seconds > 0 ? `${formatDuration(seconds)} watched` : 'O only'}`,
         ),
       )
       row.appendChild(info)
@@ -2743,7 +2742,6 @@
           seconds: viewing.seconds,
           os: viewing.os,
           time: new Date(viewing.firstMs),
-          again: viewing.again,
         }))
         session.os
           .filter((event) => event.image)
@@ -3637,13 +3635,17 @@
     )
     // The viewing (from Sessions) a play or O at time t belongs to
     const viewings = sessions.flatMap((session) => session.viewings)
+    // (the closest, when two are near each other)
     function viewingOf(sceneId, t) {
-      return viewings.find(
-        (viewing) =>
-          viewing.sceneId === sceneId &&
-          t >= viewing.firstMs - SESSION_PLAY_GRACE_MS &&
-          t <= viewing.lastMs + SESSION_PLAY_GRACE_MS,
-      )
+      const distance = (viewing) =>
+        Math.max(viewing.firstMs - t, t - viewing.lastMs, 0)
+      return viewings
+        .filter(
+          (viewing) =>
+            viewing.sceneId === sceneId &&
+            distance(viewing) <= SESSION_PLAY_GRACE_MS,
+        )
+        .sort((a, b) => distance(a) - distance(b))[0]
     }
 
     // Days from before playback was saved only have their total
@@ -3698,14 +3700,22 @@
         .slice()
         .sort((a, b) => a.time - b.time)
 
-      // Everything watched that day: each O, plus plays that aren't within
-      // 30 minutes of an O or another play of the same scene
+      // Everything watched that day: each O, plus plays that aren't part of
+      // the same viewing (like in Sessions) as an O or another play of the
+      // same scene, so watching it again shows again. Without playback,
+      // as on older days, that's within 30 minutes of one.
       const daySceneEvents = dayOs.map(({ scene, time }) => ({
         scene,
         time,
         hasO: true,
       }))
       const NEARBY_MS = 30 * 60 * 1000
+      const sameViewing = (sceneId, a, b) => {
+        const viewingA = viewingOf(sceneId, a.getTime())
+        const viewingB = viewingOf(sceneId, b.getTime())
+        if (viewingA && viewingB) return viewingA === viewingB
+        return Math.abs(a - b) < NEARBY_MS
+      }
       ;(playDayMap.get(targetDay) || [])
         .slice()
         .sort((a, b) => a.time - b.time)
@@ -3713,7 +3723,7 @@
           const isNearby = daySceneEvents.some(
             (event) =>
               event.scene.id === scene.id &&
-              Math.abs(event.time - time) < NEARBY_MS,
+              sameViewing(String(scene.id), event.time, time),
           )
           if (!isNearby) daySceneEvents.push({ scene, time, hasO: false })
         })
