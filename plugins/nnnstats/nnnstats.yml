@@ -1,0 +1,27 @@
+name: NNN Stats
+description: Adds a No Nut November tracker to the top bar, with a timer, watch time, a watch calendar and a day-by-day timeline
+version: 1.0
+ui:
+  css:
+    - nnnstats.css
+  javascript:
+    - nnnstats.js
+  assets:
+    /: .
+settings:
+  01_hideNavbarTimer:
+    displayName: Hide Top Bar Timer
+    type: BOOLEAN
+    description: Shows only the icon in the top bar, without the day you're on (or how long you lasted). Default false.
+  02_ignoreImageOs:
+    displayName: "Ignore Image O's"
+    type: BOOLEAN
+    description: "An O on an image doesn't end No Nut November. Default false."
+
+# Watch time and image O's come from O Stats when it's installed. Without
+# it, No Nut November tracks them itself and saves them with nnnsaver.py
+# (runPluginOperation), in nnndata.json
+exec:
+  - python
+  - '{pluginDir}/nnnsaver.py'
+interface: raw

@@ -1,0 +1,891 @@
+/* No Nut November - in the same style as O Stats. Everything but the top
+   bar button sits inside the .nn panel, with its own copy of O Stats'
+   tokens, so it looks the same whether or not O Stats is installed. */
+
+/* ===== Top bar button ===== */
+.nn-nav-btn {
+  gap: 0.4rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.nn-nav-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.nn-nav-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.nn-nav-label:empty {
+  display: none;
+}
+
+.nn-nav-btn.is-going .nn-nav-label {
+  color: #ff8a3d;
+}
+
+.nn-nav-btn.is-failed .nn-nav-label {
+  color: #9aa5b1;
+}
+
+.nn-nav-btn.is-done .nn-nav-label {
+  color: #f5b942;
+}
+
+/* ===== Tokens ===== */
+.nn {
+  --nn-card: rgba(255, 255, 255, 0.035);
+  --nn-card-hover: rgba(255, 255, 255, 0.06);
+  --nn-inset: rgba(0, 0, 0, 0.22);
+  --nn-border: rgba(255, 255, 255, 0.08);
+  --nn-border-strong: rgba(255, 255, 255, 0.16);
+  --nn-text: #f2f5f8;
+  --nn-muted: #9aa5b1;
+  --nn-faint: #6b7682;
+  --nn-radius: 14px;
+  --nn-radius-sm: 9px;
+
+  --nn-blue: #4c8dff;
+  --nn-green: #34c38f;
+  --nn-amber: #f5b942;
+  --nn-orange: #ff8a3d;
+  --nn-purple: #a78bfa;
+  --nn-pink: #f472b6;
+  --nn-gray: #8a94a6;
+
+  color: var(--nn-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.nn *,
+.nn *::before,
+.nn *::after {
+  box-sizing: border-box;
+}
+
+/* ===== Panel ===== */
+/* Above Stash's top bar (1030) and its menus */
+.nn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1070;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 3vh 1rem;
+  overflow-y: auto;
+  background: rgba(5, 8, 11, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.nn-dialog {
+  width: 100%;
+  max-width: 1160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  padding: 1.4rem 1.5rem 1.5rem;
+  background: #182028;
+  border: 1px solid var(--nn-border-strong);
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.nn-card {
+  background: var(--nn-card);
+  border: 1px solid var(--nn-border);
+  border-radius: var(--nn-radius);
+}
+
+.nn-loading {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--nn-faint);
+}
+
+.nn-note {
+  padding: 0.9rem 1.1rem;
+  font-size: 0.88rem;
+  color: var(--nn-muted);
+  border: 1px dashed var(--nn-border-strong);
+  border-radius: var(--nn-radius-sm);
+}
+
+.nn-source {
+  margin-top: -1rem;
+  text-align: right;
+  font-size: 0.75rem;
+  color: var(--nn-faint);
+}
+
+/* ===== Header ===== */
+.nn-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.nn-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.nn-hero-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  font-size: 1.45rem;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 138, 61, 0.35),
+    rgba(255, 138, 61, 0.08)
+  );
+  border: 1px solid rgba(255, 138, 61, 0.35);
+}
+
+.nn-hero h2 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--nn-text);
+}
+
+.nn-hero-sub {
+  color: var(--nn-muted);
+  font-size: 0.9rem;
+  margin-top: 0.1rem;
+}
+
+.nn-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* ===== Sections ===== */
+.nn-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  scroll-margin-top: 1rem;
+}
+
+.nn-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nn-section-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--nn-muted);
+}
+
+/* ===== Buttons ===== */
+.nn-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  color: var(--nn-text);
+  background: transparent;
+  border: 1px solid var(--nn-border-strong);
+  border-radius: var(--nn-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.nn-btn:hover:not(:disabled) {
+  background: var(--nn-card-hover);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.nn-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nn-btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.nn-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nn-pager-label {
+  min-width: 4.5rem;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.nn-tag {
+  display: inline-block;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--nn-pink);
+  background: color-mix(in srgb, var(--nn-pink) 15%, transparent);
+  vertical-align: 1px;
+}
+
+/* ===== Timer ===== */
+.nn-timer {
+  --nn-accent: var(--nn-orange);
+  position: relative;
+  overflow: hidden;
+  padding: 1.5rem 1.5rem 1.3rem;
+  text-align: center;
+  background:
+    radial-gradient(
+      120% 140% at 50% 0%,
+      color-mix(in srgb, var(--nn-accent) 16%, transparent),
+      transparent 60%
+    ),
+    var(--nn-card);
+}
+
+.nn-timer::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--nn-accent);
+  opacity: 0.7;
+}
+
+.nn-timer-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--nn-accent);
+}
+
+.nn-timer-units {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0.9rem 0 1.3rem;
+}
+
+.nn-timer-unit {
+  min-width: 6.5rem;
+  padding: 0.75rem 0.5rem 0.6rem;
+  background: var(--nn-inset);
+  border: 1px solid var(--nn-border);
+  border-radius: 12px;
+}
+
+.nn-timer-value {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+/* The seconds, ticking, in the timer's colour */
+.nn-timer.is-going .nn-timer-unit:last-child .nn-timer-value {
+  color: var(--nn-accent);
+}
+
+.nn-timer-name {
+  margin-top: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nn-muted);
+}
+
+/* November, with a notch between each day */
+.nn-progress {
+  position: relative;
+  height: 12px;
+  max-width: 760px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: var(--nn-inset);
+  border: 1px solid var(--nn-border);
+}
+
+.nn-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--nn-accent) 45%, transparent),
+    var(--nn-accent)
+  );
+  transition: width 0.4s;
+}
+
+.nn-progress-ticks {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(30, 1fr);
+  pointer-events: none;
+}
+
+.nn-progress-ticks span + span {
+  border-left: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.nn-progress-pin {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.25rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+}
+
+.nn-progress-scale {
+  display: flex;
+  justify-content: space-between;
+  max-width: 760px;
+  margin: 0.45rem auto 0;
+  font-size: 0.75rem;
+  color: var(--nn-faint);
+}
+
+.nn-progress-percent {
+  color: var(--nn-muted);
+  font-weight: 600;
+}
+
+.nn-timer-note {
+  margin-top: 0.9rem;
+  font-size: 0.88rem;
+  color: var(--nn-muted);
+}
+
+.nn-timer-note a {
+  color: var(--nn-text);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+/* ===== Stat cards ===== */
+.nn-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.nn-stat {
+  --nn-accent: var(--nn-blue);
+  position: relative;
+  padding: 1.05rem 1.1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nn-stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--nn-accent);
+  opacity: 0.55;
+}
+
+.nn-stat-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+  margin-bottom: 0.55rem;
+  background: color-mix(in srgb, var(--nn-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nn-accent) 30%, transparent);
+}
+
+.nn-stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nn-stat-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--nn-muted);
+  margin-top: 0.2rem;
+}
+
+.nn-stat-sub {
+  font-size: 0.8rem;
+  color: var(--nn-faint);
+  margin-top: 0.15rem;
+  line-height: 1.4;
+}
+
+/* ===== Charts ===== */
+.nn-chart {
+  --nn-accent: var(--nn-blue);
+  padding: 1.1rem 1.25rem 1rem;
+}
+
+.nn-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.nn-chart-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--nn-text);
+}
+
+.nn-chart-title::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--nn-accent);
+}
+
+.nn-chart-total {
+  font-size: 0.85rem;
+  color: var(--nn-muted);
+  margin-top: 0.2rem;
+}
+
+.nn-chart-total strong {
+  color: var(--nn-text);
+}
+
+/* ===== Watch Calendar ===== */
+.nn-cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.nn-cal-weekday {
+  font-size: 0.7rem;
+  text-align: center;
+  color: var(--nn-faint);
+}
+
+.nn-cal-cell {
+  position: relative;
+  height: 68px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.4rem 0.5rem;
+  border: 0;
+  border-radius: var(--nn-radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--nn-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.1s;
+}
+
+.nn-cal-cell:hover:not(:disabled) {
+  outline-color: rgba(255, 255, 255, 0.6);
+}
+
+.nn-cal-cell[data-level='1'],
+.nn-swatch[data-level='1'] {
+  background: color-mix(in srgb, var(--nn-accent) 30%, transparent);
+}
+
+.nn-cal-cell[data-level='2'],
+.nn-swatch[data-level='2'] {
+  background: color-mix(in srgb, var(--nn-accent) 52%, transparent);
+}
+
+.nn-cal-cell[data-level='3'],
+.nn-swatch[data-level='3'] {
+  background: color-mix(in srgb, var(--nn-accent) 76%, transparent);
+}
+
+.nn-cal-cell[data-level='4'],
+.nn-swatch[data-level='4'] {
+  background: var(--nn-accent);
+}
+
+.nn-cal-day {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.nn-cal-time {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+}
+
+.nn-cal-o {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.nn-cal-cell.is-today {
+  outline-color: var(--nn-text);
+}
+
+.nn-cal-cell.is-selected {
+  outline: 2px solid var(--nn-accent);
+  outline-offset: 2px;
+}
+
+/* The day of the first O, then the days after it, struck through */
+.nn-cal-cell.is-fail {
+  box-shadow: inset 0 0 0 2px var(--nn-pink);
+}
+
+.nn-cal-cell.is-after {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    rgba(0, 0, 0, 0.22) 6px 12px
+  );
+}
+
+.nn-cal-cell.is-future {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.nn-cal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--nn-muted);
+}
+
+.nn-cal-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+}
+
+.nn-cal-fact strong {
+  color: var(--nn-text);
+}
+
+.nn-cal-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.nn-swatch {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nn-cal-legend span:first-child {
+  margin-right: 2px;
+}
+
+.nn-cal-legend span:last-child {
+  margin-left: 2px;
+}
+
+/* ===== Day by Day ===== */
+.nn-otd {
+  padding: 1.15rem 1.25rem 0;
+}
+
+.nn-otd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+}
+
+.nn-otd-date {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.nn-otd-weekday {
+  color: var(--nn-muted);
+  font-size: 0.85rem;
+}
+
+.nn-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 36px;
+  margin-bottom: 0.6rem;
+}
+
+.nn-panel-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nn-muted);
+}
+
+.nn-panel-title .nn-count {
+  margin-left: 0.4rem;
+  color: var(--nn-faint);
+}
+
+/* ===== Videos Watched ===== */
+.nn-videos {
+  padding: 0.35rem;
+  border: 1px solid var(--nn-border);
+  border-radius: var(--nn-radius-sm);
+  background: var(--nn-inset);
+}
+
+.nn-video {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.15s;
+}
+
+.nn-video:hover {
+  background: var(--nn-card-hover);
+  color: inherit;
+  text-decoration: none;
+}
+
+.nn-video + .nn-video {
+  margin-top: 2px;
+}
+
+.nn-video.has-o {
+  background: rgba(76, 141, 255, 0.08);
+  border-color: rgba(76, 141, 255, 0.35);
+}
+
+.nn-video.has-o:hover {
+  background: rgba(76, 141, 255, 0.14);
+}
+
+.nn-video img {
+  width: 88px;
+  height: 50px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #000;
+}
+
+.nn-video img.is-image {
+  object-fit: contain;
+}
+
+.nn-video-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.nn-video-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nn-video-meta {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--nn-muted);
+}
+
+.nn-video-emoji {
+  flex-shrink: 0;
+  padding: 0 0.35rem;
+  font-size: 1.35rem;
+  white-space: nowrap;
+}
+
+.nn-empty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--nn-faint);
+  font-size: 0.9rem;
+}
+
+/* The day's numbers along the bottom */
+.nn-otd-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin: 1.25rem -1.25rem 0;
+  border-top: 1px solid var(--nn-border);
+}
+
+.nn-otd-stat {
+  padding: 1rem 1.25rem 1.1rem;
+  text-align: center;
+}
+
+.nn-otd-stat + .nn-otd-stat {
+  border-left: 1px solid var(--nn-border);
+}
+
+.nn-otd-stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--nn-accent);
+}
+
+.nn-otd-stat-label {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--nn-muted);
+}
+
+/* ===== Narrow screens ===== */
+@media (max-width: 600px) {
+  .nn-overlay {
+    padding: 0;
+  }
+
+  .nn-dialog {
+    min-height: 100%;
+    gap: 1.5rem;
+    padding: 1rem 0.85rem 1.25rem;
+    border-radius: 0;
+    border: 0;
+  }
+
+  .nn-hero h2 {
+    font-size: 1.3rem;
+  }
+
+  .nn-timer {
+    padding: 1.2rem 0.85rem 1rem;
+  }
+
+  .nn-timer-units {
+    gap: 0.4rem;
+  }
+
+  .nn-timer-unit {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .nn-timer-value {
+    font-size: 2rem;
+  }
+
+  .nn-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nn-stat-value {
+    font-size: 1.35rem;
+  }
+
+  .nn-chart {
+    padding: 1rem 0.85rem 0.85rem;
+  }
+
+  .nn-cal {
+    gap: 3px;
+  }
+
+  .nn-cal-cell {
+    height: 48px;
+    padding: 0.3rem;
+  }
+
+  .nn-cal-time {
+    display: none;
+  }
+
+  .nn-otd {
+    padding: 1rem 0.85rem 0;
+  }
+
+  .nn-otd-stats {
+    margin: 1rem -0.85rem 0;
+  }
+
+  .nn-otd-stat + .nn-otd-stat {
+    border-left: 0;
+  }
+
+  .nn-otd-stat:nth-child(even) {
+    border-left: 1px solid var(--nn-border);
+  }
+}
