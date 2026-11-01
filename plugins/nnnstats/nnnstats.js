@@ -67,8 +67,15 @@
     link.rel = 'noopener noreferrer'
   }
 
-  // "1h 5m", "12m", "40s"
+  // To the nearest minute: 30 seconds or more rounds up. Under 30 seconds
+  // in all stays in seconds.
+  function roundToMinute(seconds) {
+    return seconds < 30 ? seconds : Math.round(seconds / 60) * 60
+  }
+
+  // "1h 5m", "12m", "20s"
   function formatDuration(seconds) {
+    seconds = roundToMinute(seconds)
     const hours = Math.floor(seconds / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     if (hours > 0) return `${hours}h ${minutes}m`
@@ -79,11 +86,29 @@
 
   // Longer spans get days: "1d 17h 41m"
   function formatLongDuration(seconds) {
+    seconds = roundToMinute(seconds)
     const days = Math.floor(seconds / 86400)
     if (days === 0) return formatDuration(seconds)
     const hours = Math.floor((seconds % 86400) / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     return `${days}d ${hours}h ${minutes}m`
+  }
+
+  // Toggles in the panel (the video list expanded) are remembered in this
+  // browser rather than saved as plugin settings
+  function loadLayoutChoice(key, fallback = false) {
+    try {
+      const saved = localStorage.getItem(key)
+      return saved === null ? fallback : saved === '1'
+    } catch (e) {
+      return fallback
+    }
+  }
+
+  function saveLayoutChoice(key, on) {
+    try {
+      localStorage.setItem(key, on ? '1' : '0')
+    } catch (e) {}
   }
 
   // "9:42pm"
@@ -1478,6 +1503,11 @@
   // ===== DAY BY DAY =====
   // Like O Stats' On This Day: the videos watched that day, then the day's
   // numbers. Returns the function that shows a day.
+  const VIDEOS_SHOWN = 5
+  const LIST_EXPANDED_KEY = 'nnnstats_video_list_expanded'
+  // Whether the video list is expanded, remembered in this browser
+  let listExpanded = loadLayoutChoice(LIST_EXPANDED_KEY)
+
   function createDayView(parent, model, onShow) {
     const card = createEl('div', 'nn-card nn-otd')
     parent.appendChild(card)
@@ -1536,7 +1566,27 @@
       const listTitle = createEl('h5', 'nn-panel-title', 'Videos Watched')
       listTitle.appendChild(createEl('span', 'nn-count', String(viewings.length)))
       listHead.appendChild(listTitle)
-      card.append(listHead, createViewedList(model, viewings))
+      const list = createViewedList(model, viewings)
+      card.append(listHead, list)
+
+      // Five fit, and the rest scroll; Expand shows them all. Only offered
+      // when there are more than five.
+      if (viewings.length > VIDEOS_SHOWN) {
+        const expandButton = createEl('button', 'nn-btn')
+        expandButton.type = 'button'
+        const setExpanded = (on) => {
+          list.classList.toggle('is-collapsed', !on)
+          expandButton.innerText = on ? 'Collapse ▲' : 'Expand ▼'
+          expandButton.setAttribute('aria-expanded', String(on))
+        }
+        expandButton.addEventListener('click', () => {
+          listExpanded = !listExpanded
+          saveLayoutChoice(LIST_EXPANDED_KEY, listExpanded)
+          setExpanded(listExpanded)
+        })
+        setExpanded(listExpanded)
+        listHead.appendChild(expandButton)
+      }
 
       // The day's numbers. Watch time is the day's total; the stretches only
       // when there's no total (they come from the same tracking).

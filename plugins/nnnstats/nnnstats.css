@@ -704,6 +704,14 @@
   background: var(--nn-inset);
 }
 
+/* Collapsed, five videos fit and the rest scroll: each row is its 50px
+   thumbnail, 0.5rem of padding and a 1px border top and bottom, with 2px
+   between rows, plus the list's own padding and border */
+.nn-videos.is-collapsed {
+  max-height: calc(5 * (50px + 1rem + 2px) + 4 * 2px + 0.7rem + 2px);
+  overflow-y: auto;
+}
+
 .nn-video {
   display: flex;
   align-items: center;
