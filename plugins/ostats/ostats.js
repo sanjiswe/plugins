@@ -2316,6 +2316,10 @@
   const SESSION_PLAY_GRACE_MS = 5 * 60 * 1000
   const SESSIONS_PER_PAGE = 5
   const SESSION_MIN_STRETCH_SECONDS = 5
+  // Only sessions with at least this many videos are shown. The others
+  // still count toward watch time and Content Viewed.
+  const SESSION_MIN_VIDEOS = 2
+  const isShownSession = (session) => session.videos.size >= SESSION_MIN_VIDEOS
 
   // scenes need their play history (addPlayHistory), to tell which videos
   // Stash counted as watched
@@ -3877,7 +3881,10 @@
       const daySessions = hideSessionBars
         ? []
         : sessions.filter(
-            (s) => s.startMs < dayEndMs && s.endMs >= dayStartMs,
+            (s) =>
+              isShownSession(s) &&
+              s.startMs < dayEndMs &&
+              s.endMs >= dayStartMs,
           )
       let openSession = null
       daySessions.forEach((session) => {
@@ -4625,7 +4632,11 @@
         )
         if (!sessionsSection) return
         sessionsSection.querySelector('.os-otd-loading')?.remove()
-        createSessionsSection(sessionsSection, sessions, scenes)
+        createSessionsSection(
+          sessionsSection,
+          sessions.filter(isShownSession),
+          scenes,
+        )
       })
       .catch((err) => {
         console.error('[OStats] Failed loading sessions:', err)
