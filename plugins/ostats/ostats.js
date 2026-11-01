@@ -821,6 +821,15 @@
     return '0m'
   }
 
+  // A video's or session's time watched: past a minute, more than 30
+  // seconds into the next one counts as a whole one (1m 33s is 2m, 1m 20s
+  // is 1m)
+  function formatWatched(seconds) {
+    if (seconds < 60) return formatDuration(seconds)
+    const minutes = Math.floor(seconds / 60) + (seconds % 60 > 30 ? 1 : 0)
+    return formatDuration(minutes * 60)
+  }
+
   // Longer spans get days: "1d 17h 41m"
   function formatLongDuration(seconds) {
     const days = Math.floor(seconds / 86400)
@@ -2670,7 +2679,7 @@
           'os-video-meta',
           image
             ? `${formatClock(time)} · Image`
-            : `${formatClock(time)} · ${seconds > 0 ? `${formatDuration(seconds)} watched` : 'O only'}`,
+            : `${formatClock(time)} · ${seconds > 0 ? `${formatWatched(seconds)} watched` : 'O only'}`,
         ),
       )
       row.appendChild(info)
@@ -2708,7 +2717,7 @@
         stat.append(createEl('strong', '', value), ` ${text}`)
         stats.appendChild(stat)
       }
-      addStat(formatDuration(session.seconds), 'watched')
+      addStat(formatWatched(session.seconds), 'watched')
       const videoCount = session.videos.size
       addStat(String(videoCount), videoCount === 1 ? 'video' : 'videos')
       row.appendChild(stats)
@@ -2766,7 +2775,7 @@
       }
       row.addEventListener('click', () => setOpen(detail.hidden))
       row.setAttribute('aria-expanded', 'false')
-      row.title = `${plural(videoCount, 'video')}, ${plural(session.os.length, 'O')}, ${formatDuration(session.seconds)} watched between ${formatClockRange(session.start, session.end)}`
+      row.title = `${plural(videoCount, 'video')}, ${plural(session.os.length, 'O')}, ${formatWatched(session.seconds)} watched between ${formatClockRange(session.start, session.end)}`
 
       wrap.append(row, detail)
       list.appendChild(wrap)
@@ -3908,7 +3917,7 @@
           const title =
             `${formatClockRange(session.start, session.end)} · ` +
             `${videos} video${videos === 1 ? '' : 's'} · ` +
-            `${formatDuration(session.seconds)} watched · ` +
+            `${formatWatched(session.seconds)} watched · ` +
             `${session.os.length} O${session.os.length === 1 ? '' : "'s"}`
           hitArea.title = title
           hitArea.classList.add('is-clickable')
@@ -4214,7 +4223,7 @@
           if (viewing && !shownViewings.has(viewing)) {
             shownViewings.add(viewing)
             if (viewing.seconds >= 1) {
-              watchTimeText = `${timeStr} · ${formatDuration(viewing.seconds)} watched`
+              watchTimeText = `${timeStr} · ${formatWatched(viewing.seconds)} watched`
             }
           }
           infoContainer.appendChild(
