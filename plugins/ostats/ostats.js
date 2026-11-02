@@ -2087,7 +2087,7 @@
     const metrics = {
       videos: {
         label: 'Videos',
-        accent: 'var(--os-amber)',
+        accent: 'var(--os-blue)',
         format: formatNumber,
         total: (n) => `${formatNumber(n)} video${n === 1 ? '' : 's'}`,
       },
@@ -2324,6 +2324,7 @@
   // Leeway for a play Stash logs a little before or after its stretch
   const SESSION_PLAY_GRACE_MS = 5 * 60 * 1000
   const SESSIONS_PER_PAGE = 5
+  const SHOW_RECENT_SESSIONS = false
   const SESSION_MIN_STRETCH_SECONDS = 5
   // Only sessions with at least this many videos are shown (a setting).
   // The others still count toward watch time and Content Viewed.
@@ -3696,6 +3697,7 @@
     let selectedDayOffset = 0
     // Whether the Content Viewed list is expanded, remembered in this browser
     let isExpanded = loadLayoutChoice('ostats_content_list_expanded')
+    let sessionsExpanded = loadLayoutChoice('ostats_sessions_list_expanded')
 
     // Function to render the day
     async function renderDay(dayOffset) {
@@ -3978,7 +3980,7 @@
         timelineViz.appendChild(hourLabel)
       }
 
-      // Timeline markers: blue for O's, orange for image O's, gray for
+      // Timeline markers: blue for O's (on scenes and images), gray for
       // watches without an O, green for sessions. All are sorted together
       // so they alternate sides by time.
       const timelineEvents = [
@@ -4007,18 +4009,14 @@
       timelineEvents.forEach((event, index) => {
         const color = event.session
           ? 'var(--os-green)'
-          : event.image
-            ? 'var(--os-orange)'
-            : event.isO
-              ? 'var(--os-blue)'
-              : 'var(--os-gray)'
+          : event.isO
+            ? 'var(--os-blue)'
+            : 'var(--os-gray)'
         const glow = event.session
           ? 'rgba(52, 195, 143, 0.55)'
-          : event.image
-            ? 'rgba(255, 138, 61, 0.55)'
-            : event.isO
-              ? 'rgba(76, 141, 255, 0.55)'
-              : 'rgba(138, 148, 166, 0.45)'
+          : event.isO
+            ? 'rgba(76, 141, 255, 0.55)'
+            : 'rgba(138, 148, 166, 0.45)'
         // A session shows its first video
         const item = event.scene || event.image ? highlightOf(event) : null
         const hour = event.time.getHours()
@@ -4246,8 +4244,31 @@
           createEl('span', 'os-count', String(daySessions.length)),
         )
         sessionsHead.appendChild(sessionsTitle)
+        // Like Content Viewed: room for three, scrolling for more, or all
+        // of them with Expand (remembered in this browser)
+        const canCollapse = daySessions.length > 3
+        if (canCollapse) {
+          const sessionsExpandButton = createEl(
+            'button',
+            'os-btn',
+            sessionsExpanded ? 'Collapse ▲' : 'Expand ▼',
+          )
+          sessionsExpandButton.addEventListener('click', () => {
+            sessionsExpanded = !sessionsExpanded
+            saveLayoutChoice('ostats_sessions_list_expanded', sessionsExpanded)
+            renderDay(selectedDayOffset)
+          })
+          sessionsHead.appendChild(sessionsExpandButton)
+        }
         sessionsPanel.appendChild(sessionsHead)
-        openSession = createSessionList(sessionsPanel, daySessions, scenes)
+        openSession = createSessionList(sessionsPanel, daySessions, scenes, {
+          perPage: Infinity,
+        })
+        if (canCollapse && !sessionsExpanded) {
+          sessionsPanel
+            .querySelector('.os-session-list')
+            .classList.add('is-collapsed')
+        }
       }
 
       // Summary strip at the bottom
@@ -4569,8 +4590,9 @@
       Number(settings.sessionMinVideos) > 0
         ? Number(settings.sessionMinVideos)
         : DEFAULT_SESSION_MIN_VIDEOS
+    // Recent Sessions is hidden for now; On This Day lists each day's
     let sessionsSection = null
-    if (!settings.hideSessions) {
+    if (SHOW_RECENT_SESSIONS && !settings.hideSessions) {
       sessionsSection = createSection(root, 'Sessions')
       sessionsSection.appendChild(
         createEl('div', 'os-card os-otd-loading', 'Loading sessions…'),

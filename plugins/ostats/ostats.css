@@ -956,6 +956,14 @@ a.os-stat:hover {
   gap: 0.45rem;
 }
 
+/* On This Day's list, collapsed: room for three sessions, then it
+   scrolls (a session row is about 4.06rem tall) */
+.os-session-list.is-collapsed {
+  max-height: calc(3 * 4.06rem + 2 * 0.45rem);
+  overflow-y: auto;
+  align-content: start;
+}
+
 .os-session-wrap {
   border: 1px solid var(--os-border);
   border-radius: var(--os-radius-sm);

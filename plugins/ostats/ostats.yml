@@ -13,7 +13,7 @@ settings:
   00_hideImageOs:
     displayName: "Hide Image O's"
     type: BOOLEAN
-    description: Leaves O's on images out of the stats. When shown, they count toward O's Today, the streak, Most O's in One Day, the O graph and the O Calendar, appear as orange markers on the On This Day timeline and in its Content Viewed list, and get their own Image with Most O's highlight. Average min/O only counts O's on scenes, since images have no watch time. The time of every O on an image is saved even while this is on. Default false.
+    description: Leaves O's on images out of the stats. When shown, they count toward O's Today, the streak, Most O's in One Day, the O graph and the O Calendar, appear as blue markers on the On This Day timeline and in its Content Viewed list, and get their own Image with Most O's highlight. Average min/O only counts O's on scenes, since images have no watch time. The time of every O on an image is saved even while this is on. Default false.
   01_hideTopStats:
     displayName: 'Hide Today & Weekly'
     type: BOOLEAN
@@ -121,7 +121,7 @@ settings:
   20a_hideSessions:
     displayName: Hide Sessions
     type: BOOLEAN
-    description: Hides the Recent Sessions section, and in On This Day the session bars on the timeline, the day's Sessions list and the Sessions stat. Sessions are recorded automatically from what plays in Stash's scene player, and are still saved while this is on. Default false.
+    description: Hides the sessions in On This Day (the session bars on the timeline, the day's Sessions list and the Sessions stat). Sessions are recorded automatically from what plays in Stash's scene player, and are still saved while this is on. Default false.
   20b_sessionBreakMinutes:
     displayName: '[Sessions] Break Between Sessions (minutes)'
     type: NUMBER
@@ -129,7 +129,7 @@ settings:
   20c_sessionMinVideos:
     displayName: '[Sessions] Videos Needed for a Session'
     type: NUMBER
-    description: How many videos a session needs before it shows up in Sessions and On This Day. Sessions with fewer still count toward your watch time. Default 2.
+    description: How many videos a session needs before it shows up in On This Day. Sessions with fewer still count toward your watch time. Default 2.
   21_showLibraryStats:
     displayName: Show Library Stats
     type: BOOLEAN
